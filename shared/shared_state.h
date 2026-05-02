@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <sys/types.h>
 
+// Saare constants aur structs jo shared memory mein jaate hain
+
 #define MAX_PLAYERS         4
 #define MAX_NPCS            9
 #define MAX_ENTITIES        (MAX_PLAYERS + MAX_NPCS)
@@ -17,7 +19,10 @@
 #define ALI_ROLL    2565
 #define AHMED_ROLL  0644
 
-// Har weapon ki info store karne k liye
+#define ROLL_LAST_DIGIT      5
+#define ROLL_SECOND_LAST     6
+
+// Har weapon ki info
 typedef struct {
     char name[32];
     int  slot_size;
@@ -25,17 +30,35 @@ typedef struct {
     bool occupied;
 } Weapon;
 
-#define WEAPON_NONE          -1
-#define WEAPON_SOLAR_CORE     0
-#define WEAPON_LUNAR_BLADE    1
-#define WEAPON_IRON_HALBERD   2
-#define WEAPON_VENOM_DAGGER   3
-#define WEAPON_THUNDERSTAFF   4
-#define WEAPON_OBSIDIAN_AXE   5
-#define WEAPON_FROSTBOW       6
-#define WEAPON_SPLINTER_STICK 7
+#define WEAPON_NONE           -1
+#define WEAPON_SOLAR_CORE      0
+#define WEAPON_LUNAR_BLADE     1
+#define WEAPON_IRON_HALBERD    2
+#define WEAPON_VENOM_DAGGER    3
+#define WEAPON_THUNDERSTAFF    4
+#define WEAPON_OBSIDIAN_AXE    5
+#define WEAPON_FROSTBOW        6
+#define WEAPON_SPLINTER_STICK  7
 
-// Player ya NPC ki sari info store karne k liye
+// Game mein available weapons ka master table
+struct WeaponDefinition {
+    const char* name;
+    int slot_size;
+    int damage;
+};
+
+static const WeaponDefinition WEAPON_TABLE[] = {
+    {"Solar Core",     10, 95},
+    {"Lunar Blade",    10, 90},
+    {"Iron Halberd",    7, 55},
+    {"Venom Dagger",    4, 30},
+    {"Thunderstaff",    6, 50},
+    {"Obsidian Axe",    5, 45},
+    {"Frostbow",        6, 48},
+    {"Splinter Stick",  2, 12}
+};
+
+// Player ya NPC ki sari info
 typedef struct {
     char    name[32];
     int     hp;
@@ -54,7 +77,7 @@ typedef struct {
     int     lts_count;
 } Entity;
 
-// Entity k possible actions define karne k liye
+// Entity k possible actions
 typedef enum {
     ACTION_NONE = 0,
     ACTION_ATTACK_STRIKE,
@@ -76,7 +99,7 @@ typedef struct {
     int         weapon_id;
 } ActionSlot;
 
-// Artifacts kis k paas hain track karne k liye
+// Artifacts kis k paas hain
 typedef struct {
     bool    solar_core_free;
     int     solar_core_holder;
@@ -91,7 +114,7 @@ typedef struct {
     pthread_mutex_t table_mutex;
 } ArtifactTable;
 
-// Game ka overall status track karne k liye
+// Game ka overall status
 typedef enum {
     GAME_RUNNING = 0,
     GAME_WIN,
@@ -99,7 +122,7 @@ typedef enum {
     GAME_QUIT
 } GameStatus;
 
-// Poora shared memory ka main struct — sab processes yahi dekhte hain
+// Poora shared memory ka main struct
 typedef struct {
     Entity          entities[MAX_ENTITIES];
     int             player_count;

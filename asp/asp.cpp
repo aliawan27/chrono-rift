@@ -1,26 +1,47 @@
 #include <iostream>
 #include <unistd.h>
+#include <csignal>
 #include "shared/shared_memory.h"
 
 using namespace std;
 
-// Shared memory se attach ho, Arbiter ka likha hua parho
-int main() {
-    sleep(1);
+// ASP stub, NPC ki baari pe Skip submit karta hai abhi k liye
+static bool running = true;
 
-    cout << "ASP: Shared memory se attach ho raha hai..." << std::endl;
+void handle_sigterm(int) {
+    running = false;
+}
+
+int main() {
+    signal(SIGTERM, handle_sigterm);
 
     SharedState* state = attach_shared_memory();
-    if (!state) {
-        std::cerr << "ASP: Attach nahi hua." << std::endl;
-        return 1;
-    }
+    if (!state) return 1;
 
-    pthread_mutex_lock(&state->state_mutex);
-    cout << "ASP: player_count = " << state->player_count << std::endl;
-    cout << "ASP: npc_count    = " << state->npc_count    << std::endl;
-    cout << "ASP: game_status  = " << state->game_status  << std::endl;
-    pthread_mutex_unlock(&state->state_mutex);
+    cout << "[ASP] Ready. Waiting for turns..." << endl;
+
+    while (running && state->game_status == GAME_RUNNING) {
+        sem_wait(&state->turn_sem);
+        if (!running || state->game_status != GAME_RUNNING) break;
+
+        pthread_mutex_lock(&state->action_mutex);
+        int idx = state->current_turn;
+        pthread_mutex_unlock(&state->action_mutex);
+
+        if (idx >= state->player_count) {
+            cout << "[ASP] " << state->entities[idx].name
+                 << "'s turn — submitting Skip." << endl;
+
+            pthread_mutex_lock(&state->action_mutex);
+            state->action_slot.ready        = true;
+            state->action_slot.actor_index  = idx;
+            state->action_slot.target_index = -1;
+            state->action_slot.action       = ACTION_SKIP;
+            pthread_mutex_unlock(&state->action_mutex);
+        } else {
+            sem_post(&state->turn_sem);
+        }
+    }
 
     munmap(state, sizeof(SharedState));
     return 0;
