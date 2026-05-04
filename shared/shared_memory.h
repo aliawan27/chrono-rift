@@ -10,7 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include "shared_state.h"
+#include "shared/shared_state.h"
 
 // Shared memory banana — sirf Arbiter call karta hai startup pe
 inline SharedState* create_shared_memory() {
@@ -48,26 +48,26 @@ inline SharedState* create_shared_memory() {
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
 
-    pthread_mutex_init(&state->state_mutex, &mutex_attr);
-    pthread_mutex_init(&state->action_mutex, &mutex_attr);
-    pthread_mutex_init(&state->artifacts.table_mutex, &mutex_attr);
+    pthread_mutex_init(&state->state_mutex,            &mutex_attr);
+    pthread_mutex_init(&state->action_mutex,           &mutex_attr);
+    pthread_mutex_init(&state->artifacts.table_mutex,  &mutex_attr);
 
     pthread_mutexattr_destroy(&mutex_attr);
 
-    sem_init(&state->turn_sem, 1, 0);
+    sem_init(&state->player_turn_sem, 1, 0);
+    sem_init(&state->npc_turn_sem,    1, 0);
 
-    state->game_status    = GAME_RUNNING;
-    state->enemies_killed = 0;
+    state->game_status       = GAME_RUNNING;
+    state->enemies_killed    = 0;
     state->action_slot.ready = false;
 
     for (int i = 0; i < MAX_ENTITIES; i++) {
-        for (int j = 0; j < INVENTORY_SIZE; j++) {
+        for (int j = 0; j < INVENTORY_SIZE; j++)
             state->entities[i].inventory[j] = -1;
-        }
         state->entities[i].lts_count = 0;
     }
 
-    printf("Shared memory create ho gai.\n");
+    printf("Shared memory created.\n");
     return state;
 }
 
@@ -95,7 +95,7 @@ inline SharedState* attach_shared_memory() {
     }
 
     close(fd);
-    printf("Shared memory se attach ho gaye.\n");
+    printf("Shared memory attached.\n");
     return state;
 }
 
@@ -106,12 +106,13 @@ inline void destroy_shared_memory(SharedState* state) {
     pthread_mutex_destroy(&state->state_mutex);
     pthread_mutex_destroy(&state->action_mutex);
     pthread_mutex_destroy(&state->artifacts.table_mutex);
-    sem_destroy(&state->turn_sem);
+    sem_destroy(&state->player_turn_sem);
+    sem_destroy(&state->npc_turn_sem);
 
     munmap(state, sizeof(SharedState));
     shm_unlink(SHM_NAME);
 
-    printf("Shared memory destroy ho gai.\n");
+    printf("Shared memory destroyed.\n");
 }
 
 #endif

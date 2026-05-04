@@ -10,16 +10,22 @@
 
 using namespace std;
 
-// Sabse pehle full stamina wala entity dhundho
+// Sabse pehle full stamina wala entity dhundho — highest stamina wala pehle
 inline int find_next_actor(SharedState* state) {
+    int best_idx   = -1;
+    int best_stamp = -1;
+
     for (int i = 0; i < state->total_entities; i++) {
         Entity* e = &state->entities[i];
         if (e->is_alive && !e->is_stunned &&
             e->stamina >= e->max_stamina) {
-            return i;
+            if (e->stamina > best_stamp) {
+                best_stamp = e->stamina;
+                best_idx   = i;
+            }
         }
     }
-    return -1;
+    return best_idx;
 }
 
 // Ek tick mein sab entities ki stamina badhao
@@ -44,23 +50,21 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                      : nullptr;
 
     switch (action->action) {
-
         case ACTION_ATTACK_STRIKE:
             if (target && target->is_alive) {
                 target->hp -= actor->damage;
                 if (target->hp <= 0) {
-                    target->hp = 0;
+                    target->hp       = 0;
                     target->is_alive = false;
                     if (!target->is_player)
                         state->enemies_killed++;
                     cout << "[ACTION] " << actor->name
-                         << " ne " << target->name
-                         << " ko kill kar diya!" << endl;
+                         << " killed " << target->name << "!" << endl;
                 } else {
                     cout << "[ACTION] " << actor->name
-                         << " ne " << target->name
-                         << " par " << actor->damage
-                         << " damage kiya. HP: " << target->hp << endl;
+                         << " dealt " << actor->damage
+                         << " damage to " << target->name
+                         << ". HP: " << target->hp << endl;
                 }
             }
             actor->stamina = 0;
@@ -71,37 +75,37 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                 target->stamina -= actor->damage;
                 if (target->stamina < 0) target->stamina = 0;
                 cout << "[ACTION] " << actor->name
-                     << " ne " << target->name
-                     << " ki stamina " << actor->damage
-                     << " se ghata di." << endl;
+                     << " reduced " << target->name
+                     << "'s stamina by " << actor->damage
+                     << ". Stamina: " << target->stamina << endl;
             }
             actor->stamina = 0;
             break;
 
         case ACTION_HEAL:
-            actor->hp += actor->max_hp * 0.1;
+            actor->hp += (int)(actor->max_hp * 0.1);
             if (actor->hp > actor->max_hp)
                 actor->hp = actor->max_hp;
             cout << "[ACTION] " << actor->name
-                 << " ne heal kiya. HP: " << actor->hp << endl;
+                 << " healed. HP: " << actor->hp << endl;
             actor->stamina = 0;
             break;
 
         case ACTION_SKIP:
             cout << "[ACTION] " << actor->name
-                 << " ne turn skip kiya." << endl;
-            actor->stamina = actor->max_stamina * 0.5;
+                 << " skipped their turn." << endl;
+            actor->stamina = (int)(actor->max_stamina * 0.5);
             break;
 
         case ACTION_QUIT:
-            cout << "[ACTION] Player ne quit kiya." << endl;
+            cout << "[ACTION] Player quit the game." << endl;
             state->game_status = GAME_QUIT;
-            actor->stamina = 0;
+            actor->stamina     = 0;
             break;
 
         default:
-            cout << "[ACTION] Unknown action — skip assume kar raha hai." << endl;
-            actor->stamina = actor->max_stamina * 0.5;
+            cout << "[ACTION] Unknown action — assuming skip." << endl;
+            actor->stamina = (int)(actor->max_stamina * 0.5);
             break;
     }
 }
@@ -112,7 +116,7 @@ inline void check_game_status(SharedState* state) {
 
     if (state->enemies_killed >= 10) {
         state->game_status = GAME_WIN;
-        cout << "[GAME] Players jeet gaye! 10 enemies kill ho gaye." << endl;
+        cout << "[GAME] Players win! 10 enemies killed." << endl;
         return;
     }
 
@@ -126,70 +130,79 @@ inline void check_game_status(SharedState* state) {
 
     if (!any_player_alive) {
         state->game_status = GAME_LOSE;
-        cout << "[GAME] Saare players mar gaye. Game over." << endl;
+        cout << "[GAME] All players dead. Game over." << endl;
     }
 }
 
-// Main scheduling loop — game tab tak chalta hai jab tak koi condition trigger na ho
-inline void run_scheduler(SharedState* state) {
-    cout << "[SCHEDULER] Scheduling loop started." << endl;
+// Player ya NPC turn k liye action slot ka wait karo
+inline bool wait_for_action(SharedState* state, int actor_idx) {
+    bool is_player = state->entities[actor_idx].is_player;
 
-    while (state->game_status == GAME_RUNNING) {
-
-        // Stamina tick karo
-        tick_stamina(state);
-
-        // Dekho koi act kar sakta hai
-        int actor_idx = find_next_actor(state);
-        if (actor_idx == -1) {
-            usleep(100000); // 100ms wait
-            continue;
+    if (is_player) {
+        while (true) {
+            pthread_mutex_lock(&state->action_mutex);
+            bool ready = state->action_slot.ready;
+            pthread_mutex_unlock(&state->action_mutex);
+            if (ready) return true;
+            usleep(10000);
         }
-
-        Entity* actor = &state->entities[actor_idx];
-        cout << "[SCHEDULER] " << actor->name << "'s turn." << endl;
-
-        // Action slot clear karo
-        pthread_mutex_lock(&state->action_mutex);
-        state->action_slot.ready = false;
-        state->current_turn = actor_idx;
-        pthread_mutex_unlock(&state->action_mutex);
-
-        // HIP ya ASP ko signal do ke unki baari hai
-        sem_post(&state->turn_sem);
-
-        // 3 second wait karo action k liye (NPC timeout)
+    } else {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 3;
 
-        bool action_received = false;
-        while (!action_received) {
+        while (true) {
             pthread_mutex_lock(&state->action_mutex);
-            if (state->action_slot.ready) {
-                action_received = true;
-            }
+            bool ready = state->action_slot.ready;
             pthread_mutex_unlock(&state->action_mutex);
+            if (ready) return true;
 
-            // Timeout check
             struct timespec now;
             clock_gettime(CLOCK_REALTIME, &now);
-            if (now.tv_sec >= ts.tv_sec) {
-                cout << "[SCHEDULER] " << actor->name
-                     << " did not give action in 3 sec, so assumed skip." << endl;
-                pthread_mutex_lock(&state->action_mutex);
-                state->action_slot.ready       = true;
-                state->action_slot.actor_index  = actor_idx;
-                state->action_slot.target_index = -1;
-                state->action_slot.action       = ACTION_SKIP;
-                pthread_mutex_unlock(&state->action_mutex);
-                action_received = true;
-            }
+            if (now.tv_sec >= ts.tv_sec) return false;
 
-            if (!action_received) usleep(10000); // 10ms poll
+            usleep(10000);
+        }
+    }
+}
+
+inline void run_scheduler(SharedState* state) {
+    cout << "[SCHEDULER] Scheduling loop started." << endl;
+
+    while (state->game_status == GAME_RUNNING) {
+        usleep(100000); // 100ms per tick — stamina fills over real time
+        tick_stamina(state);
+
+        int actor_idx = find_next_actor(state);
+        if (actor_idx == -1)
+            continue;
+
+        Entity* actor = &state->entities[actor_idx];
+        cout << "[SCHEDULER] " << actor->name << "'s turn." << endl;
+
+        pthread_mutex_lock(&state->action_mutex);
+        state->action_slot.ready = false;
+        state->current_turn      = actor_idx;
+        pthread_mutex_unlock(&state->action_mutex);
+
+        if (actor->is_player)
+            sem_post(&state->player_turn_sem);
+        else
+            sem_post(&state->npc_turn_sem);
+
+        bool action_received = wait_for_action(state, actor_idx);
+
+        if (!action_received) {
+            cout << "[SCHEDULER] " << actor->name
+                 << " timed out — assuming skip." << endl;
+            pthread_mutex_lock(&state->action_mutex);
+            state->action_slot.ready        = true;
+            state->action_slot.actor_index  = actor_idx;
+            state->action_slot.target_index = -1;
+            state->action_slot.action       = ACTION_SKIP;
+            pthread_mutex_unlock(&state->action_mutex);
         }
 
-        // Action apply karo
         pthread_mutex_lock(&state->state_mutex);
         apply_action(state, &state->action_slot);
         check_game_status(state);

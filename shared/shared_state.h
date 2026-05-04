@@ -16,11 +16,10 @@
 #define MAX_WEAPONS         10
 #define SHM_NAME            "/chrono_rift_shm"
 
-#define ALI_ROLL    2565
-#define AHMED_ROLL  0644
-
-#define ROLL_LAST_DIGIT      5
-#define ROLL_SECOND_LAST     6
+#define ALI_ROLL            2565
+#define AHMED_ROLL          0644
+#define ROLL_LAST_DIGIT     5
+#define ROLL_SECOND_LAST    6
 
 // Har weapon ki info
 typedef struct {
@@ -48,14 +47,14 @@ struct WeaponDefinition {
 };
 
 static const WeaponDefinition WEAPON_TABLE[] = {
-    {"Solar Core",     10, 95},
-    {"Lunar Blade",    10, 90},
-    {"Iron Halberd",    7, 55},
-    {"Venom Dagger",    4, 30},
-    {"Thunderstaff",    6, 50},
-    {"Obsidian Axe",    5, 45},
-    {"Frostbow",        6, 48},
-    {"Splinter Stick",  2, 12}
+    {"Solar Core",      10, 95},
+    {"Lunar Blade",     10, 90},
+    {"Iron Halberd",     7, 55},
+    {"Venom Dagger",     4, 30},
+    {"Thunderstaff",     6, 50},
+    {"Obsidian Axe",     5, 45},
+    {"Frostbow",         6, 48},
+    {"Splinter Stick",   2, 12}
 };
 
 // Player ya NPC ki sari info
@@ -135,7 +134,8 @@ typedef struct {
     GameStatus      game_status;
     pthread_mutex_t state_mutex;
     pthread_mutex_t action_mutex;
-    sem_t           turn_sem;
+    sem_t           player_turn_sem;
+    sem_t           npc_turn_sem;
 } SharedState;
 
 #endif

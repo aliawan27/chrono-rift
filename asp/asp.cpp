@@ -5,23 +5,25 @@
 
 using namespace std;
 
-// ASP stub, NPC ki baari pe Skip submit karta hai abhi k liye
-static bool running = true;
+// ASP stub — NPC ki baari pe Skip submit karta hai abhi k liye
+static bool         running = true;
+static SharedState* state   = nullptr;
 
 void handle_sigterm(int) {
     running = false;
+    sem_post(&state->npc_turn_sem);
 }
 
 int main() {
     signal(SIGTERM, handle_sigterm);
 
-    SharedState* state = attach_shared_memory();
+    state = attach_shared_memory();
     if (!state) return 1;
 
     cout << "[ASP] Ready. Waiting for turns..." << endl;
 
     while (running && state->game_status == GAME_RUNNING) {
-        sem_wait(&state->turn_sem);
+        sem_wait(&state->npc_turn_sem);
         if (!running || state->game_status != GAME_RUNNING) break;
 
         pthread_mutex_lock(&state->action_mutex);
@@ -38,8 +40,6 @@ int main() {
             state->action_slot.target_index = -1;
             state->action_slot.action       = ACTION_SKIP;
             pthread_mutex_unlock(&state->action_mutex);
-        } else {
-            sem_post(&state->turn_sem);
         }
     }
 
