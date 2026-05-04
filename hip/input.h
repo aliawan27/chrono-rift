@@ -3,27 +3,29 @@
 
 #include <iostream>
 #include <string>
+#include <csignal>
 #include "shared/shared_state.h"
 
 using namespace std;
 
 // Player se action input lene aur parse karne k liye
-
 inline void print_turn_menu(Entity* player, SharedState* state) {
     cout << "\n============================" << endl;
     cout << "Your turn: " << player->name << endl;
     cout << "HP: " << player->hp << "/" << player->max_hp
-         << " | Stamina: " << player->stamina << "/" << player->max_stamina << endl;
+         << " | Stamina: " << player->stamina
+         << "/" << player->max_stamina << endl;
     cout << "----------------------------" << endl;
     cout << "Actions:" << endl;
     cout << "  1. Attack (Strike)  — deal " << player->damage << " HP damage" << endl;
     cout << "  2. Attack (Exhaust) — deal " << player->damage << " stamina damage" << endl;
     cout << "  3. Heal             — restore 10% HP" << endl;
     cout << "  4. Skip             — skip turn" << endl;
-    cout << "  5. Quit             — quit game" << endl;
+    cout << "  5. Stun             — stun target for 3 seconds" << endl;
+    cout << "  6. Ultimate         — freeze all NPCs for 10 seconds" << endl;
+    cout << "  7. Quit             — quit game" << endl;
     cout << "----------------------------" << endl;
 
-    // Show alive enemies
     cout << "Enemies:" << endl;
     for (int i = state->player_count; i < state->total_entities; i++) {
         Entity* e = &state->entities[i];
@@ -31,7 +33,9 @@ inline void print_turn_menu(Entity* player, SharedState* state) {
             cout << "  [" << (i - state->player_count)
                  << "] " << e->name
                  << " | HP: " << e->hp
-                 << " | Stamina: " << e->stamina << endl;
+                 << " | Stamina: " << e->stamina;
+            if (e->is_stunned) cout << " [STUNNED]";
+            cout << endl;
         }
     }
     cout << "============================" << endl;
@@ -63,8 +67,8 @@ inline void get_player_action(int player_idx, SharedState* state) {
     print_turn_menu(player, state);
 
     int choice = 0;
-    while (choice < 1 || choice > 5) {
-        cout << "Enter choice (1-5): ";
+    while (choice < 1 || choice > 7) {
+        cout << "Enter choice (1-7): ";
         cin >> choice;
     }
 
@@ -90,7 +94,16 @@ inline void get_player_action(int player_idx, SharedState* state) {
             action.action = ACTION_SKIP;
             break;
         case 5:
+            action.action       = ACTION_STUN;
+            action.target_index = pick_target(state);
+            break;
+        case 6:
+            action.action = ACTION_ULTIMATE;
+            break;
+        case 7:
             action.action = ACTION_QUIT;
+            // Send SIGTERM to Arbiter
+            kill(state->arbiter_pid, SIGTERM);
             break;
         default:
             action.action = ACTION_SKIP;

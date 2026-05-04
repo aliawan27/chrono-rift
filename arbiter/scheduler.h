@@ -4,13 +4,14 @@
 #include <iostream>
 #include <unistd.h>
 #include <cstring>
+#include <csignal>
 #include <semaphore.h>
 #include <pthread.h>
 #include "shared/shared_state.h"
 
 using namespace std;
 
-// Sabse pehle full stamina wala entity dhundho — highest stamina wala pehle
+// Sabse pehle full stamina wala entity dhundho
 inline int find_next_actor(SharedState* state) {
     int best_idx   = -1;
     int best_stamp = -1;
@@ -79,6 +80,31 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                      << "'s stamina by " << actor->damage
                      << ". Stamina: " << target->stamina << endl;
             }
+            actor->stamina = 0;
+            break;
+
+        case ACTION_STUN:
+            // Stun signal target process ko bhejna
+            if (target && target->is_alive) {
+                cout << "[ACTION] " << actor->name
+                     << " stunned " << target->name
+                     << " for 3 seconds!" << endl;
+                target->is_stunned = true;
+
+                // Signal the correct process
+                pid_t target_pid = target->is_player
+                                   ? state->hip_pid
+                                   : state->asp_pid;
+                kill(target_pid, SIGUSR1);
+            }
+            actor->stamina = 0;
+            break;
+
+        case ACTION_ULTIMATE:
+            cout << "[ACTION] " << actor->name
+                 << " triggered Ultimate Ability! ASP frozen for 10 seconds." << endl;
+            kill(state->asp_pid, SIGSTOP);
+            alarm(10);
             actor->stamina = 0;
             break;
 
@@ -166,11 +192,12 @@ inline bool wait_for_action(SharedState* state, int actor_idx) {
     }
 }
 
+// Main scheduling loop — game tab tak chalta hai jab tak koi condition trigger na ho
 inline void run_scheduler(SharedState* state) {
     cout << "[SCHEDULER] Scheduling loop started." << endl;
 
     while (state->game_status == GAME_RUNNING) {
-        usleep(100000); // 100ms per tick — stamina fills over real time
+        usleep(100000);
         tick_stamina(state);
 
         int actor_idx = find_next_actor(state);

@@ -5,9 +5,28 @@
 
 using namespace std;
 
-// ASP stub — NPC ki baari pe Skip submit karta hai abhi k liye
+// ASP stub — NPC ki baari pe Skip submit karta hai, SIGUSR1 se stun handle karta hai
 static bool         running = true;
 static SharedState* state   = nullptr;
+
+// Stun signal handler — 3 second pause karo
+void handle_sigusr1(int) {
+    cout << "[ASP] Stun signal received! Pausing for 3 seconds..." << endl;
+    sleep(3);
+
+    // Clear stun flag for the stunned NPC
+    if (state) {
+        pthread_mutex_lock(&state->state_mutex);
+        for (int i = state->player_count; i < state->total_entities; i++) {
+            if (state->entities[i].is_stunned) {
+                state->entities[i].is_stunned = false;
+                cout << "[ASP] " << state->entities[i].name
+                     << " stun ended." << endl;
+            }
+        }
+        pthread_mutex_unlock(&state->state_mutex);
+    }
+}
 
 void handle_sigterm(int) {
     running = false;
@@ -15,6 +34,7 @@ void handle_sigterm(int) {
 }
 
 int main() {
+    signal(SIGUSR1, handle_sigusr1);
     signal(SIGTERM, handle_sigterm);
 
     state = attach_shared_memory();

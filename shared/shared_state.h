@@ -86,7 +86,8 @@ typedef enum {
     ACTION_HEAL,
     ACTION_SKIP,
     ACTION_ULTIMATE,
-    ACTION_QUIT
+    ACTION_QUIT,
+    ACTION_STUN
 } ActionType;
 
 // HIP ya ASP ka chosen action Arbiter ko bhejne k liye
@@ -136,6 +137,9 @@ typedef struct {
     pthread_mutex_t action_mutex;
     sem_t           player_turn_sem;
     sem_t           npc_turn_sem;
+    pid_t           asp_pid;
+    pid_t           hip_pid;
+    pid_t           arbiter_pid;
 } SharedState;
 
 #endif
