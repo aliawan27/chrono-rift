@@ -1,17 +1,14 @@
-# Compiled binaries (build outputs, never commit these)
+# Compiled binaries
 arbiter_exe
 hip_exe
 asp_exe
 
-# Build directories created by the IDE
+# Build directories
 arbiter/build/
 hip/build/
 
-# IDE config folder
+# IDE config
 .vscode/
 
-# Phase 6 files — not implemented yet, exclude from this commit
-shared/inventory.h
-
-# Phase 7 files — not implemented yet, exclude from this commit
+# Phase 7 files — not implemented yet
 shared/artifacts.h
