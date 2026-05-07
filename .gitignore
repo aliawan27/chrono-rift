@@ -10,5 +10,3 @@ hip/build/
 # IDE config
 .vscode/
 
-# Phase 7 files — not implemented yet
-shared/artifacts.h
