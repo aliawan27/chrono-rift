@@ -1,0 +1,17 @@
+# Compiled binaries (build outputs, never commit these)
+arbiter_exe
+hip_exe
+asp_exe
+
+# Build directories created by the IDE
+arbiter/build/
+hip/build/
+
+# IDE config folder
+.vscode/
+
+# Phase 6 files — not implemented yet, exclude from this commit
+shared/inventory.h
+
+# Phase 7 files — not implemented yet, exclude from this commit
+shared/artifacts.h

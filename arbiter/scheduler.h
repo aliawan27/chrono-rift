@@ -7,7 +7,10 @@
 #include <csignal>
 #include <semaphore.h>
 #include <pthread.h>
+#include <cstdlib>
 #include "shared/shared_state.h"
+#include "shared/inventory.h"
+#include "shared/artifacts.h"
 
 using namespace std;
 
@@ -57,8 +60,16 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                 if (target->hp <= 0) {
                     target->hp       = 0;
                     target->is_alive = false;
-                    if (!target->is_player)
+                    release_all_artifacts(state, action->target_index);
+                    if (!target->is_player) {
                         state->enemies_killed++;
+                        // 40% chance weapon drop
+                        if (rand() % 100 < 40) {
+                            state->pending_drop_weapon_id = rand() % 8;
+                            cout << "[DROP] " << target->name
+                                 << " dropped a weapon!" << endl;
+                        }
+                    }
                     cout << "[ACTION] " << actor->name
                          << " killed " << target->name << "!" << endl;
                 } else {
@@ -89,6 +100,7 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                 cout << "[ACTION] " << actor->name
                      << " stunned " << target->name
                      << " for 3 seconds!" << endl;
+                state->stun_target_index = action->target_index;  // store BEFORE signal
                 target->is_stunned = true;
 
                 // Signal the correct process
@@ -101,10 +113,56 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
             break;
 
         case ACTION_ULTIMATE:
+            if (!check_ultimate_eligibility(state, action->actor_index)) {
+                cout << "[ACTION] " << actor->name
+                     << " lacks Solar Core + Lunar Blade — Ultimate rejected." << endl;
+                actor->stamina = (int)(actor->max_stamina * 0.5);
+            } else {
+                cout << "[ACTION] " << actor->name
+                     << " triggered Ultimate Ability! ASP frozen for 10 seconds." << endl;
+                kill(state->asp_pid, SIGSTOP);
+                alarm(10);
+                actor->stamina = 0;
+            }
+            break;
+
+        case ACTION_USE_WEAPON: {
+            if (target && target->is_alive &&
+                action->weapon_id >= 0 &&
+                action->weapon_id < (int)(sizeof(WEAPON_TABLE)/sizeof(WEAPON_TABLE[0]))) {
+                int dmg = WEAPON_TABLE[action->weapon_id].damage;
+                target->hp -= dmg;
+                if (target->hp <= 0) {
+                    target->hp       = 0;
+                    target->is_alive = false;
+                    release_all_artifacts(state, action->target_index);
+                    if (!target->is_player) {
+                        state->enemies_killed++;
+                        if (rand() % 100 < 40) {
+                            state->pending_drop_weapon_id = rand() % 8;
+                            cout << "[DROP] " << target->name
+                                 << " dropped a weapon!" << endl;
+                        }
+                    }
+                    cout << "[ACTION] " << actor->name
+                         << " (weapon) killed " << target->name << "!" << endl;
+                } else {
+                    cout << "[ACTION] " << actor->name
+                         << " used " << WEAPON_TABLE[action->weapon_id].name
+                         << " for " << dmg
+                         << " damage on " << target->name
+                         << ". HP: " << target->hp << endl;
+                }
+            }
+            actor->stamina = 0;
+            break;
+        }
+
+        case ACTION_SWAP_IN:
+            swap_in(actor, action->weapon_id);
             cout << "[ACTION] " << actor->name
-                 << " triggered Ultimate Ability! ASP frozen for 10 seconds." << endl;
-            kill(state->asp_pid, SIGSTOP);
-            alarm(10);
+                 << " swapped in weapon from LTS slot "
+                 << action->weapon_id << "." << endl;
             actor->stamina = 0;
             break;
 
@@ -233,7 +291,13 @@ inline void run_scheduler(SharedState* state) {
         pthread_mutex_lock(&state->state_mutex);
         apply_action(state, &state->action_slot);
         check_game_status(state);
-        pthread_mutex_unlock(&state->state_mutex);
+        // Spawn Eclipse Relic at exactly 5 kills
+        if (state->enemies_killed == 5 && !state->artifacts.eclipse_relic_exists) {
+            pthread_mutex_unlock(&state->state_mutex);
+            spawn_eclipse_relic(state);
+        } else {
+            pthread_mutex_unlock(&state->state_mutex);
+        }
     }
 
     cout << "[SCHEDULER] Game ended. Status: " << state->game_status << endl;
