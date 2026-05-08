@@ -6,6 +6,7 @@
 #include "shared/shared_memory.h"
 #include "arbiter/init.h"
 #include "arbiter/scheduler.h"
+#include "shared/artifacts.h"
 
 using namespace std;
 
@@ -35,7 +36,6 @@ int main() {
         cin >> player_count;
     }
 
-    srand(ALI_ROLL);
     int npc_count = rand() % 8 + 2;
     cout << "[ARBITER] Players: " << player_count
          << " | NPCs: " << npc_count << endl;
@@ -75,7 +75,13 @@ int main() {
 
     sleep(1);
 
+    pthread_t monitor_thread;
+    pthread_create(&monitor_thread, nullptr, deadlock_monitor, state);
+
     run_scheduler(state);
+
+    pthread_cancel(monitor_thread);
+    pthread_join(monitor_thread, nullptr);
 
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);

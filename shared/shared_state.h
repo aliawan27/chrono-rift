@@ -17,7 +17,7 @@
 #define SHM_NAME            "/chrono_rift_shm"
 
 #define ALI_ROLL            2565
-#define AHMED_ROLL          0644
+#define AHMED_ROLL          644
 #define ROLL_LAST_DIGIT     5
 #define ROLL_SECOND_LAST    6
 
@@ -140,6 +140,9 @@ typedef struct {
     pid_t           asp_pid;
     pid_t           hip_pid;
     pid_t           arbiter_pid;
+    int             stun_target_index;
+    int             pending_drop_weapon_id;
+    bool            npc_should_pickup;
 } SharedState;
 
 #endif

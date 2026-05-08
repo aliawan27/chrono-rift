@@ -57,9 +57,11 @@ inline SharedState* create_shared_memory() {
     sem_init(&state->player_turn_sem, 1, 0);
     sem_init(&state->npc_turn_sem,    1, 0);
 
-    state->game_status       = GAME_RUNNING;
-    state->enemies_killed    = 0;
-    state->action_slot.ready = false;
+    state->game_status             = GAME_RUNNING;
+    state->enemies_killed          = 0;
+    state->action_slot.ready       = false;
+    state->pending_drop_weapon_id  = -1;
+    state->npc_should_pickup       = false;
 
     for (int i = 0; i < MAX_ENTITIES; i++) {
         for (int j = 0; j < INVENTORY_SIZE; j++)

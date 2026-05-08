@@ -1,0 +1,12 @@
+# Compiled binaries
+arbiter_exe
+hip_exe
+asp_exe
+
+# Build directories
+arbiter/build/
+hip/build/
+
+# IDE config
+.vscode/
+
