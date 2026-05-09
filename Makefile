@@ -1,8 +1,7 @@
 CXX      = g++
 CXXFLAGS = -Wall -Wextra -std=c++17 -pthread -I.
 
-LIBS = -lncurses -lrt
-
+LIBS = -lsfml-graphics -lsfml-window -lsfml-audio -lsfml-network -lsfml-system -lrt
 TARGETS = arbiter_exe hip_exe asp_exe
 
 all: clean $(TARGETS)

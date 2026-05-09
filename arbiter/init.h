@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <iostream>
 #include "shared/shared_state.h"
+#include "shared/inventory.h"
 
 using namespace std;
 
@@ -43,10 +44,15 @@ inline void init_entities(SharedState* state, int player_count, int npc_count) {
         for (int j = 0; j < INVENTORY_SIZE; j++)
             e->inventory[j] = -1;
 
+        // Give every player a starting Venom Dagger so they have
+        // an offensive option even before the first drop.
+        allocate_weapon(e, WEAPON_VENOM_DAGGER);
+
         cout << "[INIT] " << e->name
              << " | HP: " << e->hp
              << " | Speed: " << e->speed
              << " | Damage: " << e->damage << endl;
+        cout << "[INIT] " << e->name << " starts with Venom Dagger." << endl;
     }
 
     // NPCs initialize karo
@@ -81,6 +87,9 @@ inline void init_entities(SharedState* state, int player_count, int npc_count) {
              << " | Damage: " << e->damage << endl;
     }
 
+    // Track how many NPCs spawned so far
+    state->total_npcs_spawned = npc_count;
+
     // Artifact table initialize karo
     state->artifacts.solar_core_free        = true;
     state->artifacts.solar_core_holder      = -1;
@@ -92,6 +101,42 @@ inline void init_entities(SharedState* state, int player_count, int npc_count) {
     state->artifacts.eclipse_relic_free     = true;
     state->artifacts.eclipse_relic_holder   = -1;
     state->artifacts.eclipse_relic_wanted_by = -1;
+}
+
+// Spawn a single new NPC into the next free entity slot.
+// Caller must hold state_mutex. Returns the new entity index, or -1 if full.
+inline int spawn_npc_entity(SharedState* state) {
+    int slot = state->total_entities;
+    if (slot >= MAX_ENTITIES) return -1;
+
+    Entity* e = &state->entities[slot];
+    int npc_number = state->total_npcs_spawned + 1;
+    snprintf(e->name, sizeof(e->name), "Enemy %d", npc_number);
+
+    int last_two  = ALI_ROLL % 100;
+    e->max_hp     = last_two + (rand() % 151 + 50);
+    e->hp         = e->max_hp;
+    e->max_stamina = MAX_STAMINA_NPC;
+    e->stamina    = 0;
+    e->speed      = rand() % 21 + 10;
+    e->damage     = ROLL_SECOND_LAST + 10;
+    e->is_player  = false;
+    e->is_alive   = true;
+    e->is_stunned = false;
+    e->lts_count  = 0;
+
+    for (int j = 0; j < INVENTORY_SIZE; j++)
+        e->inventory[j] = -1;
+
+    state->total_entities++;
+    state->total_npcs_spawned++;
+
+    cout << "[SPAWN] " << e->name
+         << " | HP: " << e->hp
+         << " | Speed: " << e->speed
+         << " | Damage: " << e->damage << endl;
+
+    return slot;
 }
 
 #endif

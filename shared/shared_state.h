@@ -9,11 +9,13 @@
 
 #define MAX_PLAYERS         4
 #define MAX_NPCS            9
-#define MAX_ENTITIES        (MAX_PLAYERS + MAX_NPCS)
+#define MAX_TOTAL_NPCS      20
+#define MAX_ENTITIES        (MAX_PLAYERS + MAX_TOTAL_NPCS)
 #define MAX_STAMINA_PLAYER  100
 #define MAX_STAMINA_NPC     150
 #define INVENTORY_SIZE      20
 #define MAX_WEAPONS         10
+#define ACTION_LOG_SIZE     8
 #define SHM_NAME            "/chrono_rift_shm"
 
 #define ALI_ROLL            2565
@@ -122,6 +124,16 @@ typedef enum {
     GAME_QUIT
 } GameStatus;
 
+// Renderer -> HIP input handoff (filled by render thread on key press)
+typedef struct {
+    bool    pending;        // renderer sets true when input is ready
+    int     choice;         // 1-9 action menu choice
+    int     target_index;   // absolute entity index (-1 if N/A)
+    int     weapon_id;      // weapon id or LTS index (-1 if N/A)
+    bool    drop_accept;    // true=Y false=N for drop prompt
+    pthread_mutex_t mutex;
+} PlayerInput;
+
 // Poora shared memory ka main struct
 typedef struct {
     Entity          entities[MAX_ENTITIES];
@@ -143,6 +155,21 @@ typedef struct {
     int             stun_target_index;
     int             pending_drop_weapon_id;
     bool            npc_should_pickup;
+    int             spawn_pending_count;
+    int             total_npcs_spawned;
+    char            action_log[ACTION_LOG_SIZE][128];
+    int             action_log_head;
+    bool            first_kill_done;
+    int             last_actor_index;
+    bool            spawning_unlocked;
+    int             anim_attacker_idx;   // entity index that just acted
+    int             anim_target_idx;     // entity index that was hit
+    bool            anim_is_kill;        // true if target just died
+    bool            anim_pending;        // renderer reads this to trigger anim
+    PlayerInput     player_input;
+    bool            awaiting_player_input;  // HIP sets true when waiting
+    int             awaiting_player_idx;    // which player index is waiting
+    bool            awaiting_drop_response; // HIP sets true when drop prompt needed
 } SharedState;
 
 #endif

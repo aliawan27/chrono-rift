@@ -7,6 +7,7 @@
 #include "arbiter/init.h"
 #include "arbiter/scheduler.h"
 #include "shared/artifacts.h"
+#include "arbiter/renderer.h"
 
 using namespace std;
 
@@ -30,13 +31,18 @@ void handle_sigalrm(int) {
 }
 
 int main() {
-    int player_count = 0;
-    while (player_count < 1 || player_count > 4) {
-        cout << "How many players? (1-4): ";
-        cin >> player_count;
+    int player_count = prompt_player_count_window();
+    if (player_count < 1 || player_count > 4) {
+        cout << "[ARBITER] Setup cancelled. Exiting." << endl;
+        return 0;
     }
 
-    int npc_count = rand() % 8 + 2;
+    int npc_min, npc_max;
+    if      (player_count == 1) { npc_min = 2; npc_max = 5; }
+    else if (player_count == 2) { npc_min = 3; npc_max = 6; }
+    else if (player_count == 3) { npc_min = 4; npc_max = 7; }
+    else                        { npc_min = 5; npc_max = 9; }
+    int npc_count = npc_min + rand() % (npc_max - npc_min + 1);
     cout << "[ARBITER] Players: " << player_count
          << " | NPCs: " << npc_count << endl;
 
@@ -78,10 +84,15 @@ int main() {
     pthread_t monitor_thread;
     pthread_create(&monitor_thread, nullptr, deadlock_monitor, state);
 
+    pthread_t render_th;
+    pthread_create(&render_th, nullptr, render_thread, state);
+
     run_scheduler(state);
 
     pthread_cancel(monitor_thread);
     pthread_join(monitor_thread, nullptr);
+
+    pthread_join(render_th, nullptr);
 
     kill(hip_pid, SIGTERM);
     kill(asp_pid, SIGTERM);

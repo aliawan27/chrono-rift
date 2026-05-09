@@ -2,11 +2,73 @@
 arbiter_exe
 hip_exe
 asp_exe
+*.exe
+*.out
+*.app
+
+# Object files and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
 
 # Build directories
 arbiter/build/
 hip/build/
+build/
+cmake-build-*/
+Debug/
+Release/
+x64/
+x86/
 
 # IDE config
 .vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.ncb
+*.sdf
+*.opensdf
+*.cachefile
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.bak
+
+# Core dumps
+*.stackdump
+core
+core.*
+vgcore.*
+
+# Shared memory / IPC (runtime only)
+*.shm
+/tmp/chrono_*
 
