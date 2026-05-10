@@ -35,6 +35,26 @@ inline int strike_damage_for(SharedState* state, Entity* actor) {
     return actor->damage;
 }
 
+// Keep the active enemy wave topped up after an NPC dies.
+// Caller must hold state_mutex.
+inline void request_replacement_npc_if_needed(SharedState* state) {
+    if (state->total_npcs_spawned >= MAX_TOTAL_NPCS)
+        return;
+
+    int alive_npcs = 0;
+    for (int i = state->player_count; i < state->total_entities; i++) {
+        if (state->entities[i].is_alive)
+            alive_npcs++;
+    }
+
+    if (alive_npcs >= state->npc_count)
+        return;
+
+    int spawned_idx = spawn_npc_entity(state);
+    if (spawned_idx != -1)
+        state->spawn_pending_count++;
+}
+
 // After a turn, offer the Eclipse Relic to the current actor if it's free
 inline void offer_eclipse_relic(SharedState* state, int actor_idx) {
     if (!state->artifacts.eclipse_relic_exists) return;
@@ -173,19 +193,7 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
-                        // Spawn replacement if alive NPC count < initial
-                        // and hard cap not reached
-                        if (state->player_count < 4 &&
-                            state->total_npcs_spawned < MAX_TOTAL_NPCS) {
-                            int alive_npcs = 0;
-                            for (int ii = state->player_count;
-                                 ii < state->total_entities; ii++)
-                                if (state->entities[ii].is_alive) alive_npcs++;
-                            if (alive_npcs < state->npc_count) {
-                                state->spawn_pending_count++;
-                                spawn_npc_entity(state);
-                            }
-                        }
+                        request_replacement_npc_if_needed(state);
                     }
                     char buf[128];
                     snprintf(buf, sizeof(buf), "%s killed %s!",
@@ -320,17 +328,7 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
-                        if (state->player_count < 4 &&
-                            state->total_npcs_spawned < MAX_TOTAL_NPCS) {
-                            int alive_npcs = 0;
-                            for (int ii = state->player_count;
-                                 ii < state->total_entities; ii++)
-                                if (state->entities[ii].is_alive) alive_npcs++;
-                            if (alive_npcs < state->npc_count) {
-                                state->spawn_pending_count++;
-                                spawn_npc_entity(state);
-                            }
-                        }
+                        request_replacement_npc_if_needed(state);
                     }
                     char buf[128];
                     snprintf(buf, sizeof(buf),

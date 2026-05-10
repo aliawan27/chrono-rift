@@ -1,1 +1,24 @@
-# No extra packages needed beyond Dockerfile defaults
+# Chrono Rift — extra apt packages installed by Dockerfile
+# Each non-comment, non-blank line is passed to: apt-get install -y
+#
+# Core build tools and libraries are already installed directly in the
+# Dockerfile RUN layer (build-essential, cmake, gdb, libsfml-dev,
+# libsdl2-dev, libglfw3-dev, libncurses-dev).
+#
+# Add any additional apt packages below if your build requires them.
+# Example:
+#   libpng-dev
+#   libjpeg-dev
+
+# POSIX real-time extensions (shm_open, mmap, sem_open) — provided by
+# libc6-dev which is pulled in by build-essential, listed here for clarity
+libc6-dev
+
+# X11 forwarding support (needed to display the SFML window from Docker)
+libx11-dev
+libxrandr-dev
+libxcursor-dev
+libudev-dev
+libopenal-dev
+libflac-dev
+libvorbis-dev
