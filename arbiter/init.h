@@ -44,15 +44,10 @@ inline void init_entities(SharedState* state, int player_count, int npc_count) {
         for (int j = 0; j < INVENTORY_SIZE; j++)
             e->inventory[j] = -1;
 
-        // Give every player a starting Venom Dagger so they have
-        // an offensive option even before the first drop.
-        allocate_weapon(e, WEAPON_VENOM_DAGGER);
-
         cout << "[INIT] " << e->name
              << " | HP: " << e->hp
              << " | Speed: " << e->speed
              << " | Damage: " << e->damage << endl;
-        cout << "[INIT] " << e->name << " starts with Venom Dagger." << endl;
     }
 
     // NPCs initialize karo

@@ -71,6 +71,8 @@ inline SharedState* create_shared_memory() {
     state->enemies_killed          = 0;
     state->action_slot.ready       = false;
     state->pending_drop_weapon_id  = -1;
+    state->npc_weapon_id           = -1;
+    state->npc_weapon_damage_bonus = 0;
     state->npc_should_pickup       = false;
     state->spawn_pending_count     = 0;
     state->total_npcs_spawned      = 0;

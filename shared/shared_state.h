@@ -154,6 +154,9 @@ typedef struct {
     pid_t           arbiter_pid;
     int             stun_target_index;
     int             pending_drop_weapon_id;
+    int             last_dropped_weapon;
+    int             npc_weapon_id;
+    int             npc_weapon_damage_bonus;
     bool            npc_should_pickup;
     int             spawn_pending_count;
     int             total_npcs_spawned;

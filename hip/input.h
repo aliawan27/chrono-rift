@@ -15,6 +15,8 @@ inline void get_player_action(int player_idx, SharedState* state) {
 
     // Handle weapon drop first if one is pending
     if (state->pending_drop_weapon_id != -1) {
+        int dropped_weapon_id = state->pending_drop_weapon_id;
+
         // Signal renderer to show drop prompt
         state->awaiting_drop_response = true;
 
@@ -28,11 +30,19 @@ inline void get_player_action(int player_idx, SharedState* state) {
 
         if (state->player_input.drop_accept) {
             pthread_mutex_lock(&state->state_mutex);
-            bool ok = allocate_weapon(player, state->pending_drop_weapon_id);
+            bool ok = allocate_weapon(player, dropped_weapon_id);
+            if (!ok) {
+                state->npc_weapon_id = dropped_weapon_id;
+                state->npc_weapon_damage_bonus += WEAPON_TABLE[dropped_weapon_id].damage;
+                state->npc_should_pickup = true;
+            }
             pthread_mutex_unlock(&state->state_mutex);
-            if (!ok) state->npc_should_pickup = true;
         } else {
+            pthread_mutex_lock(&state->state_mutex);
+            state->npc_weapon_id = dropped_weapon_id;
+            state->npc_weapon_damage_bonus += WEAPON_TABLE[dropped_weapon_id].damage;
             state->npc_should_pickup = true;
+            pthread_mutex_unlock(&state->state_mutex);
         }
         state->pending_drop_weapon_id = -1;
     }

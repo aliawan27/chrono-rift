@@ -92,6 +92,7 @@ struct EntityVisual {
 
 // Keyboard input state machine for the SFML window
 enum InputState {
+    INPUT_WELCOME_SCREEN,   // welcome screen showing, waiting for player count
     INPUT_IDLE,
     INPUT_SHOW_MENU,        // waiting for 1-9 action choice
     INPUT_SHOW_TARGETS,     // waiting for target digit
@@ -112,10 +113,12 @@ struct RenderContext {
 
     sf::Texture player_tex,  enemy_tex;
     sf::Texture bg_tex,      logo_tex;
+    sf::Texture welcome_bg_tex;  // welcome screen background
     sf::Texture solar_tex,   lunar_tex,   eclipse_tex;
     sf::Texture victory_tex, defeat_tex;
     bool player_tex_ok=false, enemy_tex_ok=false;
     bool bg_tex_ok=false,     logo_tex_ok=false;
+    bool welcome_bg_tex_ok=false;
     bool solar_tex_ok=false,  lunar_tex_ok=false, eclipse_tex_ok=false;
     bool victory_tex_ok=false,defeat_tex_ok=false;
 
@@ -131,7 +134,7 @@ struct RenderContext {
     float frame_duration = 0.12f;  // seconds per frame (~8 fps)
 
     // Weapon icons displayed in the bottom pane. Indexed by WEAPON_TABLE
-    // entry. Loaded from assets/sprites/weapons/<id>.png.
+    // entry. Loaded from assets/sprites/weapons/weapon<id+1>.jpg.
     static constexpr int kWeaponCount = 8;
     sf::Texture weapon_tex[kWeaponCount];
     bool        weapon_tex_ok[kWeaponCount] = { false };
@@ -149,16 +152,25 @@ struct RenderContext {
     float game_over_timer   = -1.f;  // counts up after game ends
 
     // Keyboard input state
-    InputState  input_state    = INPUT_IDLE;
+    InputState  input_state    = INPUT_WELCOME_SCREEN;  // start at welcome
     int         pending_choice = 0;   // action chosen, waiting for target
     // Tracks typed digits for multi-digit target entry (enemies 0-9+)
     std::string digit_buffer;
+
+    // Welcome screen state
+    float       welcome_timer  = 0.f;  // counts up; after 2s show player count prompt
+    int         welcome_player_count = 0;  // selected player count (1-4)
+    bool        welcome_shown_prompt = false;  // true after 2s timer expired
 
     // Right side panel toggle (Tab to flip).
     //   true  -> action prompt occupies the side panel
     //   false -> enemy info occupies the side panel
     // When no prompt is active the enemy panel is shown regardless.
     bool side_show_prompt = true;
+
+    // Left player info pane toggle (P to show/hide).
+    // Starts hidden and only appears when keyboard-triggered.
+    bool show_player_panel = false;
 };
 
 // ----------------------------------------------------------------------
@@ -168,6 +180,10 @@ inline sf::Color rgb(unsigned r, unsigned g, unsigned b, unsigned a = 255) {
     return sf::Color((sf::Uint8)r, (sf::Uint8)g, (sf::Uint8)b, (sf::Uint8)a);
 }
 
+// Forward declarations for later helpers used earlier in the file.
+inline void draw_bar(RenderContext& rc, float x, float y, float w, float h,
+                     int cur, int max, sf::Color fill);
+
 // ----------------------------------------------------------------------
 // Asset loading (graceful fallback)
 // ----------------------------------------------------------------------
@@ -175,36 +191,47 @@ inline void load_assets(RenderContext& rc) {
     rc.main_font_ok = rc.main_font.loadFromFile("assets/fonts/main.ttf");
     rc.mono_font_ok = rc.mono_font.loadFromFile("assets/fonts/mono.ttf");
 
-    rc.player_tex_ok  = rc.player_tex.loadFromFile("assets/sprites/player.png");
-    rc.enemy_tex_ok   = rc.enemy_tex.loadFromFile("assets/sprites/enemy.png");
-    rc.bg_tex_ok      = rc.bg_tex.loadFromFile("assets/backgrounds/battle_bg.png");
-    rc.logo_tex_ok    = rc.logo_tex.loadFromFile("assets/ui/logo.png");
-    rc.solar_tex_ok   = rc.solar_tex.loadFromFile("assets/ui/solar_core_icon.png");
-    rc.lunar_tex_ok   = rc.lunar_tex.loadFromFile("assets/ui/lunar_blade_icon.png");
-    rc.eclipse_tex_ok = rc.eclipse_tex.loadFromFile("assets/ui/eclipse_relic_icon.png");
-    rc.victory_tex_ok = rc.victory_tex.loadFromFile("assets/ui/victory.png");
-    rc.defeat_tex_ok  = rc.defeat_tex.loadFromFile("assets/ui/defeat.png");
+    auto load_if_present = [](sf::Texture& tex, const char* path) -> bool {
+        return access(path, R_OK) == 0 && tex.loadFromFile(path);
+    };
+
+    rc.player_tex_ok  = load_if_present(rc.player_tex, "assets/sprites/player.png") ||
+                        load_if_present(rc.player_tex, "assets/sprites/player_idle.png");
+    rc.enemy_tex_ok   = load_if_present(rc.enemy_tex, "assets/sprites/enemy.png") ||
+                        load_if_present(rc.enemy_tex, "assets/sprites/enemy_idle.png");
+    rc.bg_tex_ok      = load_if_present(rc.bg_tex, "assets/backgrounds/battle_bg.png") ||
+                        load_if_present(rc.bg_tex, "assets/backgrounds/battle_bg.jpg");
+    rc.welcome_bg_tex_ok = load_if_present(rc.welcome_bg_tex, "assets/backgrounds/bg.png");
+    rc.logo_tex_ok    = load_if_present(rc.logo_tex, "assets/ui/logo.png");
+    rc.solar_tex_ok   = load_if_present(rc.solar_tex, "assets/ui/solar_core_icon.png") ||
+                        load_if_present(rc.solar_tex, "assets/ui/solar_core_icon.jpg");
+    rc.lunar_tex_ok   = load_if_present(rc.lunar_tex, "assets/ui/lunar_blade_icon.png") ||
+                        load_if_present(rc.lunar_tex, "assets/ui/lunar_blade_icon.jpg");
+    rc.eclipse_tex_ok = load_if_present(rc.eclipse_tex, "assets/ui/eclipse_relic_icon.png") ||
+                        load_if_present(rc.eclipse_tex, "assets/ui/eclipse_relic_icon.jpg");
+    rc.victory_tex_ok = load_if_present(rc.victory_tex, "assets/ui/victory.png");
+    rc.defeat_tex_ok  = load_if_present(rc.defeat_tex, "assets/ui/defeat.png");
 
     // Weapon icons for the bottom pane (one PNG per WEAPON_TABLE entry).
     for (int i = 0; i < RenderContext::kWeaponCount; i++) {
         char path[96];
         snprintf(path, sizeof(path),
-                 "assets/sprites/weapons/%d.png", i);
-        rc.weapon_tex_ok[i] = rc.weapon_tex[i].loadFromFile(path);
+                 "assets/sprites/weapons/weapon%d.jpg", i + 1);
+        rc.weapon_tex_ok[i] = load_if_present(rc.weapon_tex[i], path);
     }
 
     // Battle-field sprites (idle / attack / die per side)
-    rc.player_idle_ok   = rc.player_idle_tex.loadFromFile(
+    rc.player_idle_ok   = load_if_present(rc.player_idle_tex,
                           "assets/sprites/player_idle.png");
-    rc.player_attack_ok = rc.player_attack_tex.loadFromFile(
+    rc.player_attack_ok = load_if_present(rc.player_attack_tex,
                           "assets/sprites/player_attack.png");
-    rc.player_die_ok    = rc.player_die_tex.loadFromFile(
+    rc.player_die_ok    = load_if_present(rc.player_die_tex,
                           "assets/sprites/player_die.png");
-    rc.enemy_idle_ok    = rc.enemy_idle_tex.loadFromFile(
+    rc.enemy_idle_ok    = load_if_present(rc.enemy_idle_tex,
                           "assets/sprites/enemy_idle.png");
-    rc.enemy_attack_ok  = rc.enemy_attack_tex.loadFromFile(
+    rc.enemy_attack_ok  = load_if_present(rc.enemy_attack_tex,
                           "assets/sprites/enemy_attack.png");
-    rc.enemy_die_ok     = rc.enemy_die_tex.loadFromFile(
+    rc.enemy_die_ok     = load_if_present(rc.enemy_die_tex,
                           "assets/sprites/enemy_die.png");
 
     // Bidirectional fallback within each side: if any one of
@@ -332,6 +359,10 @@ inline void draw_header(RenderContext& rc, const GameSnapshot& snap) {
         snprintf(turn, sizeof(turn), "* %s's Turn", e.name);
         sf::Color c = e.is_player ? rgb(0x00, 0xff, 0xff) : rgb(0xff, 0x8c, 0x00);
         draw_text_safe(rc, turn, 920, 18, 22, c, true);
+        draw_bar(rc, 900, 46, 280, 6,
+                 e.stamina, e.max_stamina,
+                 e.is_player ? rgb(0x34, 0x98, 0xdb)
+                             : rgb(0xe6, 0x7e, 0x22));
     }
 }
 
@@ -433,29 +464,36 @@ inline void draw_entity_card(RenderContext& rc, const EntitySnapshot& e,
     }
 
     // Name
-    draw_text_safe(rc, e.name, x + 50, y + 6, 16, sf::Color::White, true);
+    draw_text_safe(rc, e.name, x + 50, y + 4, 13, sf::Color::White, true);
 
     // Active badge
     if (active) {
-        draw_text_safe(rc, "> ACTIVE", x + w - 90, y + 6, 14,
+        draw_text_safe(rc, "> ACT", x + w - 46, y + 4, 11,
                        rgb(0xff, 0xd7, 0x00), true);
     }
 
-    // HP bar
-    draw_bar(rc, x + 50, y + 32, w - 110, 10,
+    // HP bar — always shown
+    float bar_y = y + 22;
+    draw_bar(rc, x + 50, bar_y, w - 60, 8,
              e.hp, e.max_hp,
-             is_player_card ? rgb(0x2e, 0xcc, 0x71) : rgb(0xe7, 0x4c, 0x3c));
+             is_player_card ? rgb(0x2e,0xcc,0x71)
+                            : rgb(0xe7,0x4c,0x3c));
     char hpbuf[32];
-    snprintf(hpbuf, sizeof(hpbuf), "HP %d/%d", e.hp, e.max_hp);
-    draw_text_safe(rc, hpbuf, x + w - 56, y + 28, 12, sf::Color::White);
+    snprintf(hpbuf, sizeof(hpbuf), "%d/%d", e.hp, e.max_hp);
+    draw_text_safe(rc, hpbuf, x + w - 52, y + 18, 11,
+                   sf::Color::White);
 
-    // Stamina bar
-    draw_bar(rc, x + 50, y + 48, w - 110, 8,
-             e.stamina, e.max_stamina,
-             is_player_card ? rgb(0x34, 0x98, 0xdb) : rgb(0xe6, 0x7e, 0x22));
-    char stbuf[32];
-    snprintf(stbuf, sizeof(stbuf), "ST %d/%d", e.stamina, e.max_stamina);
-    draw_text_safe(rc, stbuf, x + w - 56, y + 44, 12, sf::Color::White);
+    // Stamina bar — only shown when card tall enough
+    if (h >= 60) {
+        draw_bar(rc, x + 50, bar_y + 16, w - 60, 6,
+                 e.stamina, e.max_stamina,
+                 is_player_card ? rgb(0x34,0x98,0xdb)
+                                : rgb(0xe6,0x7e,0x22));
+        char stbuf[32];
+        snprintf(stbuf, sizeof(stbuf), "ST%d", e.stamina);
+        draw_text_safe(rc, stbuf, x + w - 52, y + 34, 10,
+                       sf::Color::White);
+    }
 
     // Status tags
     if (e.is_stunned) {
@@ -468,21 +506,14 @@ inline void draw_entity_card(RenderContext& rc, const EntitySnapshot& e,
     }
 
     if (!e.is_alive) {
+        // Dark overlay — entity dims out, no cross
         sf::RectangleShape dim(sf::Vector2f(w, h));
         dim.setPosition(x, y);
-        dim.setFillColor(sf::Color(0, 0, 0, 178));
+        dim.setFillColor(sf::Color(0, 0, 0, 200));
         rc.window.draw(dim);
-        // X overlay
-        sf::RectangleShape l1(sf::Vector2f(w * 0.9f, 3));
-        l1.setPosition(x + w * 0.05f, y + h * 0.5f);
-        l1.setRotation(20.f);
-        l1.setFillColor(rgb(0xe7, 0x4c, 0x3c));
-        rc.window.draw(l1);
-        sf::RectangleShape l2(sf::Vector2f(w * 0.9f, 3));
-        l2.setPosition(x + w * 0.05f, y + h * 0.5f);
-        l2.setRotation(-20.f);
-        l2.setFillColor(rgb(0xe7, 0x4c, 0x3c));
-        rc.window.draw(l2);
+        draw_text_safe(rc, "FALLEN", x + w/2 - 28,
+                       y + h/2 - 8, 12,
+                       rgb(0x88, 0x88, 0x88), true);
     }
 }
 
@@ -524,11 +555,12 @@ inline void draw_enemy_panel(RenderContext& rc, const GameSnapshot& snap) {
 
     int focus = find_lowest_hp_enemy(snap);
 
-    float card_h = 35, gap = 3;
+    float card_h = 48, gap = 3;
     float cy = y + 38;
     int shown = 0;
     for (int i = snap.player_count;
          i < snap.total_entities && shown < 9; i++) {
+        if (!snap.entities[i].is_alive) continue;
         draw_entity_card(rc, snap.entities[i], i, snap.current_turn,
                          focus,
                          x + 8, cy, w - 16, card_h, false);
@@ -577,27 +609,33 @@ inline void draw_battle_bg(RenderContext& rc) {
 inline void update_battle_positions(RenderContext& rc,
                                     const GameSnapshot& snap)
 {
-    // Player positions — left edge of the visible center band. Side
-    // panes occupy x=0..240 and x=1040..1280, leaving 240..1040 visible.
-    float px = 290.f;            // 50px right of left pane edge
-    float py_start = 90.f;
-    float py_gap   = 100.f;
+    // Player positions — hug the left edge with minimal margin.
+    float px = 10.f;
+    float py_start = 30.f;
+    float py_gap   = 135.f;
     for (int i = 0; i < snap.player_count && i < MAX_PLAYERS; i++) {
         rc.entity_visuals[i].battle_pos =
             sf::Vector2f(px, py_start + i * py_gap);
     }
 
-    // Enemy positions — 3x3 grid on the right side of the center band
-    float ex_start = 770.f, ey_start = 90.f;
-    float ex_gap   = 75.f,  ey_gap   = 100.f;
+    // Two-column zigzag — column A (left) and column B (right)
+    // Even-index enemies go in column A, odd in column B.
+    // Column B is offset 50px lower than column A to create
+    // the stagger effect.
+    float col_a_x  = 650.f;
+    float col_b_x  = 820.f;
+    float y_start  = 60.f;
+    float y_step   = 80.f;   // vertical gap between same-column entries
+    float stagger  = 45.f;   // column B offset downward
+
     int shown = 0;
     for (int i = snap.player_count;
-         i < snap.total_entities && shown < 9; i++) {
-        int col = shown % 3;
-        int row = shown / 3;
-        rc.entity_visuals[i].battle_pos =
-            sf::Vector2f(ex_start + col * ex_gap,
-                         ey_start + row * ey_gap);
+         i < snap.total_entities && shown < 10; i++) {
+        int col = shown % 2;    // 0 = left column, 1 = right column
+        int row = shown / 2;
+        float ex = (col == 0) ? col_a_x : col_b_x;
+        float ey = y_start + row * y_step + (col == 1 ? stagger : 0.f);
+        rc.entity_visuals[i].battle_pos = sf::Vector2f(ex, ey);
         shown++;
     }
 }
@@ -749,8 +787,8 @@ inline void update_entity_visuals(RenderContext& rc,
 inline void draw_battle_sprites(RenderContext& rc,
                                 const GameSnapshot& snap)
 {
-    // Sprites reduced 30% (was 64x64, now 45x45)
-    float sprite_w = 45.f, sprite_h = 45.f;
+    // Increase player battle sprite size by 50%.
+    float sprite_w = 135.f, sprite_h = 135.f;
 
     for (int i = 0; i < snap.total_entities; i++) {
         const EntitySnapshot& e  = snap.entities[i];
@@ -760,40 +798,6 @@ inline void draw_battle_sprites(RenderContext& rc,
 
         sf::Vector2f pos = ev.battle_pos;
         bool is_player   = e.is_player;
-
-        // Solid dull-purple backdrop so the sprite is clearly readable
-        // against any battle background. Faded out as a dying entity
-        // disappears.
-        {
-            const float pad_x = 4.f;
-            const float pad_top = 3.f;
-            const float pad_bot = 6.f;
-            sf::RectangleShape patch(sf::Vector2f(
-                sprite_w + pad_x * 2.f,
-                sprite_h + pad_top + pad_bot));
-            patch.setPosition(pos.x - pad_x, pos.y - pad_top);
-
-            sf::Uint8 alpha = 255;
-            if (ev.anim == ANIM_DIE) {
-                float a = (ev.anim_timer / 1.2f) * 255.f;
-                if (a < 0.f) a = 0.f;
-                alpha = (sf::Uint8)a;
-            }
-            // Duller purple — desaturated, dark
-            patch.setFillColor(sf::Color(46, 32, 58, alpha));
-
-            // Outline tinted by side, brightened on the active turn
-            if (i == snap.current_turn && e.is_alive) {
-                patch.setOutlineThickness(2.f);
-                patch.setOutlineColor(sf::Color(255, 215, 0, alpha));
-            } else {
-                patch.setOutlineThickness(1.f);
-                patch.setOutlineColor(is_player
-                    ? sf::Color(74, 144, 217, alpha)
-                    : sf::Color(192, 57, 43, alpha));
-            }
-            rc.window.draw(patch);
-        }
 
         AnimTexture at = get_anim_texture(rc, ev.anim, is_player);
 
@@ -839,27 +843,34 @@ inline void draw_battle_sprites(RenderContext& rc,
                                      : rgb(0xc0, 0x39, 0x2b));
             rc.window.draw(r);
             draw_text_safe(rc, is_player ? "P" : "E",
-                           pos.x + 16, pos.y + 12, 16,
+                           pos.x + 38, pos.y + 28, 24,
                            sf::Color::White, true);
         }
 
-        // Name tag below sprite — generous clearance so glyph ascenders
-        // never visually clip into the sprite edge.
-        draw_text_safe(rc, e.name,
-                       pos.x - 10, pos.y + sprite_h + 12,
-                       12, sf::Color::White);
+        if (ev.anim != ANIM_DIE) {
+            // Name tag below sprite — generous clearance so glyph ascenders
+            // never visually clip into the sprite edge.
+            float label_y = is_player
+                            ? pos.y + sprite_h + 14
+                            : pos.y + sprite_h + 14 - 60.f;
+            draw_text_safe(rc, e.name,
+                           pos.x - 8, label_y,
+                           12, sf::Color::White);
 
-        // Small HP bar below name (narrower for smaller sprites)
-        draw_bar(rc, pos.x - 5, pos.y + sprite_h + 28,
-                 sprite_w + 10, 4,
-                 e.hp, e.max_hp,
-                 is_player ? rgb(0x2e, 0xcc, 0x71)
-                           : rgb(0xe7, 0x4c, 0x3c));
+            // HP bar below name, positioned independently to avoid panel overlap.
+            // Enemy HP bars positioned higher (closer to sprite).
+            float bar_y = is_player ? (pos.y + sprite_h + 8) : (pos.y + sprite_h - 25);
+            draw_bar(rc, pos.x - 5, bar_y,
+                     sprite_w + 10, 5,
+                     e.hp, e.max_hp,
+                     is_player ? rgb(0x2e, 0xcc, 0x71)
+                               : rgb(0xe7, 0x4c, 0x3c));
+        }
 
-        // Active turn arrow above sprite (adjusted for 45px sprite)
+        // Active turn arrow above sprite.
         if (i == snap.current_turn && e.is_alive) {
-            draw_text_safe(rc, "v", pos.x + 16, pos.y - 16,
-                           14, rgb(0xff, 0xd7, 0x00), true);
+            draw_text_safe(rc, "v", pos.x + 35, pos.y - 24,
+                           20, rgb(0xff, 0xd7, 0x00), true);
         }
     }
 }
@@ -1031,54 +1042,176 @@ inline void spawn_anim_for_log(RenderContext& rc, const std::string& msg) {
 // ----------------------------------------------------------------------
 // Bottom pane — weapon roster, centered horizontally and vertically
 // ----------------------------------------------------------------------
-inline void draw_bottom_pane(RenderContext& rc) {
-    const float pane_x = 0.f;
+inline void draw_bottom_pane(RenderContext& rc,
+                              const GameSnapshot& snap,
+                              SharedState* state) {
     const float pane_y = 650.f;
-    const float pane_w = 1280.f;
     const float pane_h = 70.f;
 
-    // Pane background
-    sf::RectangleShape bg(sf::Vector2f(pane_w, pane_h));
-    bg.setPosition(pane_x, pane_y);
+    // Background
+    sf::RectangleShape bg(sf::Vector2f(1280, pane_h));
+    bg.setPosition(0, pane_y);
     bg.setFillColor(rgb(0x10, 0x0a, 0x18));
     rc.window.draw(bg);
 
-    // Top border accent
-    sf::RectangleShape border(sf::Vector2f(pane_w, 2));
-    border.setPosition(pane_x, pane_y);
+    // Top gold border
+    sf::RectangleShape border(sf::Vector2f(1280, 2));
+    border.setPosition(0, pane_y);
     border.setFillColor(rgb(0xff, 0xd7, 0x00));
     rc.window.draw(border);
 
-    // Weapon icons row
-    const int n = RenderContext::kWeaponCount;
-    const float icon = 40.f;
-    const float gap  = 32.f;        // spacing between icons
-    const float total_w = n * icon + (n - 1) * gap;
-    const float start_x = pane_x + (pane_w - total_w) * 0.5f;
-    const float icon_y  = pane_y + (pane_h - icon) * 0.5f;
+    // Vertical divider between halves
+    sf::RectangleShape div(sf::Vector2f(2, pane_h));
+    div.setPosition(640, pane_y);
+    div.setFillColor(rgb(0x44, 0x33, 0x55));
+    rc.window.draw(div);
 
-    for (int i = 0; i < n; i++) {
-        float ix = start_x + i * (icon + gap);
+    // ── LEFT: Artifact status ─────────────────────────
+    draw_text_safe(rc, "ARTIFACTS", 12, pane_y + 6, 13,
+                   rgb(0xff,0xd7,0x00), true);
 
-        if (rc.weapon_tex_ok[i]) {
-            sf::Sprite s(rc.weapon_tex[i]);
-            sf::FloatRect lb = s.getLocalBounds();
-            s.setScale(icon / lb.width, icon / lb.height);
-            s.setPosition(ix, icon_y);
-            rc.window.draw(s);
+    struct ArtSlot {
+        const char* name;
+        sf::Texture* tex;
+        bool        tex_ok;
+        sf::Color   color;
+        bool        exists;
+        bool        free_;
+        int         holder;
+        bool        wanted;
+    } slots[3] = {
+        { "Solar Core",    &rc.solar_tex,   rc.solar_tex_ok,
+          rgb(0xff,0xd7,0x00),
+          true,
+          snap.artifacts.solar_free,
+          snap.artifacts.solar_holder,
+          snap.artifacts.solar_wanted },
+        { "Lunar Blade",   &rc.lunar_tex,   rc.lunar_tex_ok,
+          rgb(0xc0,0xc0,0xc0),
+          true,
+          snap.artifacts.lunar_free,
+          snap.artifacts.lunar_holder,
+          snap.artifacts.lunar_wanted },
+        { "Eclipse Relic", &rc.eclipse_tex, rc.eclipse_tex_ok,
+          rgb(0x9b,0x59,0xb6),
+          snap.artifacts.eclipse_exists,
+          snap.artifacts.eclipse_free,
+          snap.artifacts.eclipse_holder,
+          snap.artifacts.eclipse_wanted },
+    };
+
+    float slot_x = 110.f;
+    for (int i = 0; i < 3; i++) {
+        const ArtSlot& s = slots[i];
+        sf::Color col = s.exists ? s.color
+                                 : sf::Color(s.color.r,
+                                             s.color.g,
+                                             s.color.b, 60);
+
+        if (s.tex_ok && s.tex) {
+            sf::Sprite icon(*s.tex);
+            sf::FloatRect b = icon.getLocalBounds();
+            if (b.width > 0.f && b.height > 0.f) {
+                icon.setScale(24.f / b.width, 24.f / b.height);
+                icon.setPosition(slot_x, pane_y + 9);
+                if (!s.exists)
+                    icon.setColor(sf::Color(255, 255, 255, 60));
+                rc.window.draw(icon);
+            }
         } else {
-            // Placeholder: small colored square with weapon id
-            sf::RectangleShape r(sf::Vector2f(icon, icon));
-            r.setPosition(ix, icon_y);
-            r.setFillColor(rgb(0x2e, 0x1f, 0x3f));
-            r.setOutlineThickness(1.f);
-            r.setOutlineColor(rgb(0x88, 0x66, 0xaa));
-            rc.window.draw(r);
+            sf::CircleShape c(10.f);
+            c.setPosition(slot_x + 2, pane_y + 11);
+            c.setFillColor(col);
+            rc.window.draw(c);
+        }
 
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%d", i);
-            draw_text_safe(rc, buf, ix + 14, icon_y + 10, 18,
-                           sf::Color::White, true);
+        draw_text_safe(rc, s.name, slot_x + 32,
+                       pane_y + 8, 12, col, true);
+
+        const char* status;
+        sf::Color   sc;
+        char hbuf[48] = {};
+        if (!s.exists)
+            { status = "N/A";    sc = rgb(0x55,0x55,0x55); }
+        else if (s.wanted)
+            { status = "WANTED"; sc = rgb(0xe7,0x4c,0x3c); }
+        else if (!s.free_ && s.holder >= 0 &&
+                 s.holder < snap.total_entities) {
+            snprintf(hbuf, sizeof(hbuf), "HELD: %s",
+                     snap.entities[s.holder].name);
+            status = hbuf;
+            sc     = rgb(0xff,0x8c,0x00);
+        } else
+            { status = "FREE";   sc = rgb(0x2e,0xcc,0x71); }
+
+        draw_text_safe(rc, status, slot_x + 32,
+                       pane_y + 26, 11, sc);
+        slot_x += 170.f;
+    }
+
+    // ── RIGHT: Active player's equipped weapons ────────
+    draw_text_safe(rc, "EQUIPPED", 652, pane_y + 6, 13,
+                   rgb(0xff,0xd7,0x00), true);
+
+    int active_p = state->awaiting_player_idx;
+    if (active_p < 0 || active_p >= snap.player_count)
+        active_p = (snap.current_turn < snap.player_count)
+                   ? snap.current_turn : 0;
+
+    int inv[INVENTORY_SIZE];
+    pthread_mutex_lock(&state->state_mutex);
+    if (active_p >= 0 && active_p < state->total_entities)
+        memcpy(inv, state->entities[active_p].inventory,
+               sizeof(inv));
+    else
+        memset(inv, -1, sizeof(inv));
+    pthread_mutex_unlock(&state->state_mutex);
+
+    int wids[8]; int wcount = 0;
+    for (int s = 0; s < INVENTORY_SIZE && wcount < 8; s++) {
+        if (inv[s] == -1) continue;
+        bool seen = false;
+        for (int j = 0; j < wcount; j++)
+            if (wids[j] == inv[s]) { seen = true; break; }
+        if (!seen) wids[wcount++] = inv[s];
+    }
+
+    if (wcount == 0) {
+        draw_text_safe(rc, "(no weapons equipped)",
+                       660, pane_y + 26, 13,
+                       rgb(0x55,0x55,0x55));
+    } else {
+        float wx = 660.f;
+        const float icon_w = 40.f, icon_h = 40.f;
+        const float gap    = 14.f;
+        for (int i = 0; i < wcount && wx < 1260; i++) {
+            int wid = wids[i];
+            float wy = pane_y + (pane_h - icon_h) * 0.5f;
+
+            if (rc.weapon_tex_ok[wid]) {
+                sf::Sprite sp(rc.weapon_tex[wid]);
+                sf::FloatRect lb = sp.getLocalBounds();
+                sp.setScale(icon_w / lb.width, icon_h / lb.height);
+                sp.setPosition(wx, wy);
+                rc.window.draw(sp);
+            } else {
+                sf::RectangleShape pill(sf::Vector2f(icon_w + 60, 20));
+                pill.setPosition(wx, wy + 10);
+                pill.setFillColor(rgb(0x2e, 0x1f, 0x3f));
+                pill.setOutlineThickness(1.f);
+                pill.setOutlineColor(rgb(0x88,0x66,0xaa));
+                rc.window.draw(pill);
+                draw_text_safe(rc, WEAPON_TABLE[wid].name,
+                               wx + 4, wy + 12, 12,
+                               sf::Color::White);
+                wx += icon_w + 60 + gap;
+                continue;
+            }
+
+            draw_text_safe(rc, WEAPON_TABLE[wid].name,
+                           wx, wy + icon_h + 2, 11,
+                           sf::Color::White);
+            wx += icon_w + gap;
         }
     }
 }
@@ -1171,6 +1304,86 @@ inline void draw_game_over(RenderContext& rc, const GameSnapshot& snap) {
 }
 
 // ----------------------------------------------------------------------
+// Welcome screen — background with message and player count prompt
+// ----------------------------------------------------------------------
+inline void draw_welcome_screen(RenderContext& rc) {
+    // Draw background
+    if (rc.welcome_bg_tex_ok) {
+        sf::Sprite bg(rc.welcome_bg_tex);
+        sf::Vector2u tex_size = rc.welcome_bg_tex.getSize();
+        if (tex_size.x > 0 && tex_size.y > 0) {
+            bg.setScale(1280.f / (float)tex_size.x,
+                        720.f / (float)tex_size.y);
+        }
+        rc.window.draw(bg);
+    } else {
+        // Fallback solid color
+        sf::RectangleShape bg(sf::Vector2f(1280, 720));
+        bg.setFillColor(rgb(0x1a, 0x1a, 0x2e));
+        rc.window.draw(bg);
+    }
+
+    auto draw_centered = [&](const std::string& s, float cx, float cy,
+                             unsigned size, sf::Color color,
+                             bool bold = false) {
+        if (rc.main_font_ok) {
+            sf::Text t(s, rc.main_font, size);
+            t.setFillColor(color);
+            if (bold) t.setStyle(sf::Text::Bold);
+            sf::FloatRect b = t.getLocalBounds();
+            t.setOrigin(b.left + b.width * 0.5f,
+                        b.top + b.height * 0.5f);
+            t.setPosition(cx, cy);
+            rc.window.draw(t);
+        } else {
+            float w = s.size() * size * 0.55f;
+            sf::RectangleShape r(sf::Vector2f(w, (float)size));
+            r.setOrigin(w * 0.5f, size * 0.5f);
+            r.setPosition(cx, cy);
+            r.setFillColor(sf::Color(color.r, color.g, color.b, 80));
+            rc.window.draw(r);
+        }
+    };
+
+    sf::RectangleShape text_patch(sf::Vector2f(760.f, 380.f));
+    text_patch.setOrigin(380.f, 190.f);
+    text_patch.setPosition(640.f, 390.f);
+    text_patch.setFillColor(sf::Color(0, 0, 0, 180));
+    text_patch.setOutlineThickness(2.f);
+    text_patch.setOutlineColor(sf::Color(255, 255, 255, 45));
+    rc.window.draw(text_patch);
+
+    // Welcome title and message
+    draw_centered("CHRONO RIFT", 640, 250, 64,
+                  rgb(0xff, 0xd7, 0x00), true);
+    draw_centered("Time distortion has fractured the timeline.", 640, 325, 20,
+                  sf::Color::White, true);
+    draw_centered("Unite your team and defeat the temporal anomalies.", 640, 355, 20,
+                  sf::Color::White, true);
+
+    // After 2 seconds, show player count prompt
+    if (rc.welcome_shown_prompt) {
+        draw_centered("How many players? (1-4):", 640, 430, 28,
+                      rgb(0x2e, 0xcc, 0x71), true);
+        if (rc.welcome_player_count > 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "You selected: %d", rc.welcome_player_count);
+            draw_centered(buf, 640, 485, 24,
+                          rgb(0x2e, 0xcc, 0x71), true);
+            draw_centered("Press ENTER to start...", 640, 535, 18,
+                          rgb(0x7f, 0x8c, 0x8d), true);
+        } else {
+            draw_centered("Press 1, 2, 3, or 4", 640, 485, 22,
+                          sf::Color::White, true);
+        }
+    } else {
+        // Show timer message
+        draw_centered("Get ready...", 640, 460, 20,
+                      rgb(0x7f, 0x8c, 0x8d), true);
+    }
+}
+
+// ----------------------------------------------------------------------
 // Player-input overlay — vertical panel pinned to the right side of the
 // screen at the same slot the enemy panel uses (x=980, y=60, 300x500).
 // Toggle visibility via Tab (handled in the event loop): when the toggle
@@ -1205,33 +1418,33 @@ inline void draw_input_overlay(RenderContext& rc,
     rc.window.draw(box);
 
     // Title + Tab hint
-    draw_text_safe(rc, "ACTION", bx + 10, by + 8, 18,
+    draw_text_safe(rc, "ACTION", bx + 10, by + 8, 22,
                    rgb(0xff, 0xd7, 0x00), true);
-    draw_text_safe(rc, "[Tab] enemies", bx + bw - 100, by + 12, 11,
+    draw_text_safe(rc, "[Tab] enemies", bx + bw - 112, by + 14, 13,
                    rgb(0x7f, 0x8c, 0x8d));
 
     // ── Drop prompt ─────────────────────────────────────
     if (rc.input_state == INPUT_DROP_PROMPT && drop_id >= 0) {
         draw_text_safe(rc, "WEAPON DROPPED!",
-                       bx + 10, by + 40, 16,
+                   bx + 10, by + 44, 20,
                        rgb(0xff, 0xd7, 0x00), true);
         char wbuf[64];
         snprintf(wbuf, sizeof(wbuf), "%s",
                  WEAPON_TABLE[drop_id].name);
-        draw_text_safe(rc, wbuf, bx + 10, by + 65, 14,
+        draw_text_safe(rc, wbuf, bx + 10, by + 74, 17,
                        sf::Color::White, true);
         char sbuf[64];
         snprintf(sbuf, sizeof(sbuf), "%d dmg  %d slots",
                  WEAPON_TABLE[drop_id].damage,
                  WEAPON_TABLE[drop_id].slot_size);
-        draw_text_safe(rc, sbuf, bx + 10, by + 84, 12,
+        draw_text_safe(rc, sbuf, bx + 10, by + 98, 14,
                        rgb(0xd0, 0xd0, 0xd0));
-        draw_text_safe(rc, "Y  pick up", bx + 10, by + 120, 14,
+        draw_text_safe(rc, "Y  pick up", bx + 10, by + 142, 17,
                        rgb(0x2e, 0xcc, 0x71));
-        draw_text_safe(rc, "N  leave it", bx + 10, by + 140, 14,
+        draw_text_safe(rc, "N  leave it", bx + 10, by + 166, 17,
                        rgb(0xe7, 0x4c, 0x3c));
         draw_text_safe(rc, "(enemy will grab it)",
-                       bx + 10, by + 175, 11, rgb(0x7f, 0x8c, 0x8d));
+                   bx + 10, by + 198, 13, rgb(0x7f, 0x8c, 0x8d));
         return;
     }
 
@@ -1239,7 +1452,7 @@ inline void draw_input_overlay(RenderContext& rc,
     char header[64];
     snprintf(header, sizeof(header), "%s",
              snap.entities[player_idx].name);
-    draw_text_safe(rc, header, bx + 12, by + 38, 14,
+    draw_text_safe(rc, header, bx + 12, by + 44, 17,
                    rgb(0x00, 0xff, 0xff), true);
 
     // ── Action menu ─────────────────────────────────────
@@ -1249,24 +1462,18 @@ inline void draw_input_overlay(RenderContext& rc,
             "4 Skip", "5 Weapon",
             "6 Swap", "7 Stun", "8 Ult", "9 Quit"
         };
-        float ty = by + 58;
-        // Two columns for compactness
-        for (int i = 0; i < 5; i++) {
-            draw_text_safe(rc, actions[i], bx + 12, ty, 13,
+        float ty = by + 72;
+        // Single vertical list (no horizontal split)
+        for (int i = 0; i < 9; i++) {
+            draw_text_safe(rc, actions[i], bx + 12, ty, 16,
                            sf::Color::White);
-            ty += 18;
-        }
-        ty = by + 58;
-        for (int i = 5; i < 9; i++) {
-            draw_text_safe(rc, actions[i], bx + 125, ty, 13,
-                           sf::Color::White);
-            ty += 18;
+            ty += 22;
         }
 
         // Inventory hint (compact)
-        draw_text_safe(rc, "Weapons:", bx + 12, by + 155, 12,
+        draw_text_safe(rc, "Weapons:", bx + 12, by + 280, 15,
                        rgb(0xff, 0xd7, 0x00), true);
-        float wy = by + 175;
+        float wy = by + 304;
         int si = 0; bool any = false;
         while (si < INVENTORY_SIZE && wy < by + bh - 20) {
             int w = player->inventory[si];
@@ -1274,23 +1481,23 @@ inline void draw_input_overlay(RenderContext& rc,
                 char tmp[40];
                 snprintf(tmp, sizeof(tmp), "[%d] %s",
                          w, WEAPON_TABLE[w].name);
-                draw_text_safe(rc, tmp, bx + 12, wy, 11,
+                draw_text_safe(rc, tmp, bx + 12, wy, 13,
                                sf::Color::White);
-                wy += 14; any = true;
+                wy += 16; any = true;
                 while (si < INVENTORY_SIZE &&
                        player->inventory[si] == w) si++;
             } else si++;
         }
-        if (!any) draw_text_safe(rc, "(none)", bx + 12, wy, 11,
+        if (!any) draw_text_safe(rc, "(none)", bx + 12, wy, 13,
                                  rgb(0x7f, 0x8c, 0x8d));
         return;
     }
 
     // ── Target selection ────────────────────────────────
     if (rc.input_state == INPUT_SHOW_TARGETS) {
-        draw_text_safe(rc, "Pick target:", bx + 12, by + 58, 13,
+        draw_text_safe(rc, "Pick target:", bx + 12, by + 68, 16,
                        rgb(0xff, 0xd7, 0x00), true);
-        float ty = by + 78;
+        float ty = by + 96;
         int shown = 0;
         for (int i = snap.player_count;
              i < snap.total_entities && shown < 12 && ty < by + bh - 50; i++) {
@@ -1298,34 +1505,34 @@ inline void draw_input_overlay(RenderContext& rc,
             char tbuf[80];
             snprintf(tbuf, sizeof(tbuf),
                      "[%d] %s HP:%d",
-                     i - snap.player_count,
+                     i - snap.player_count + 1,
                      snap.entities[i].name,
                      snap.entities[i].hp);
-            draw_text_safe(rc, tbuf, bx + 12, ty, 11,
+            draw_text_safe(rc, tbuf, bx + 12, ty, 13,
                            shown % 2 == 0 ? sf::Color::White
                                           : rgb(0xd0, 0xd0, 0xd0));
-            ty += 15;
+            ty += 18;
             shown++;
         }
         if (!rc.digit_buffer.empty()) {
             std::string dbuf = "> " + rc.digit_buffer + "_";
-            draw_text_safe(rc, dbuf, bx + 12, by + bh - 45, 16,
+            draw_text_safe(rc, dbuf, bx + 12, by + bh - 48, 18,
                            rgb(0x2e, 0xcc, 0x71), true);
         }
         draw_text_safe(rc, "type num + Enter",
-                       bx + 12, by + bh - 22, 11,
+                       bx + 12, by + bh - 24, 13,
                        rgb(0x7f, 0x8c, 0x8d));
         draw_text_safe(rc, "Esc cancel",
-                       bx + 12, by + bh - 10, 11,
+                       bx + 12, by + bh - 10, 13,
                        rgb(0x7f, 0x8c, 0x8d));
         return;
     }
 
     // ── Weapon selection ────────────────────────────────
     if (rc.input_state == INPUT_SHOW_WEAPONS) {
-        draw_text_safe(rc, "Pick weapon:", bx + 12, by + 58, 13,
+        draw_text_safe(rc, "Pick weapon:", bx + 12, by + 68, 16,
                        rgb(0xff, 0xd7, 0x00), true);
-        float ty = by + 78;
+        float ty = by + 96;
         int si = 0;
         while (si < INVENTORY_SIZE && ty < by + bh - 30) {
             int w = player->inventory[si];
@@ -1335,36 +1542,36 @@ inline void draw_input_overlay(RenderContext& rc,
                          "[%d] %s  dmg:%d",
                          w, WEAPON_TABLE[w].name,
                          WEAPON_TABLE[w].damage);
-                draw_text_safe(rc, wbuf, bx + 12, ty, 11,
+                draw_text_safe(rc, wbuf, bx + 12, ty, 13,
                                sf::Color::White);
-                ty += 16;
+                ty += 18;
                 while (si < INVENTORY_SIZE &&
                        player->inventory[si] == w) si++;
             } else si++;
         }
         draw_text_safe(rc, "press ID, Esc cancel",
-                       bx + 12, by + bh - 18, 11,
+                       bx + 12, by + bh - 18, 13,
                        rgb(0x7f, 0x8c, 0x8d));
         return;
     }
 
     // ── LTS selection ───────────────────────────────────
     if (rc.input_state == INPUT_SHOW_LTS) {
-        draw_text_safe(rc, "Storage:", bx + 12, by + 58, 13,
+        draw_text_safe(rc, "Storage:", bx + 12, by + 68, 16,
                        rgb(0xff, 0xd7, 0x00), true);
-        float ty = by + 78;
+        float ty = by + 96;
         for (int i = 0; i < player->lts_count && ty < by + bh - 30; i++) {
             char wbuf[80];
             snprintf(wbuf, sizeof(wbuf), "[%d] %s dmg:%d",
                      i,
                      player->long_term_storage[i].name,
                      player->long_term_storage[i].damage);
-            draw_text_safe(rc, wbuf, bx + 12, ty, 11,
+            draw_text_safe(rc, wbuf, bx + 12, ty, 13,
                            sf::Color::White);
-            ty += 15;
+            ty += 18;
         }
         draw_text_safe(rc, "press index, Esc cancel",
-                       bx + 12, by + bh - 18, 11,
+                       bx + 12, by + bh - 18, 13,
                        rgb(0x7f, 0x8c, 0x8d));
         return;
     }
@@ -1503,6 +1710,10 @@ inline void* render_thread(void* arg) {
         std::cerr << "[RENDER] No DISPLAY env var found. "
                      "Skipping SFML window — game will run in terminal only."
                   << std::endl;
+        pthread_mutex_lock(&state->state_mutex);
+        if (state->player_count == 0)
+            state->player_count = 1;
+        pthread_mutex_unlock(&state->state_mutex);
         return nullptr;
     }
 
@@ -1511,6 +1722,10 @@ inline void* render_thread(void* arg) {
     if (!rc.window.isOpen()) {
         std::cerr << "[RENDER] Failed to open SFML window. "
                      "Game will run in terminal only." << std::endl;
+        pthread_mutex_lock(&state->state_mutex);
+        if (state->player_count == 0)
+            state->player_count = 1;
+        pthread_mutex_unlock(&state->state_mutex);
         return nullptr;
     }
     rc.window.setFramerateLimit(60);
@@ -1535,9 +1750,40 @@ inline void* render_thread(void* arg) {
 
             if (ev.type != sf::Event::KeyPressed) continue;
 
+            // -- Welcome screen handling first (before other global hotkeys) ---
+            if (rc.input_state == INPUT_WELCOME_SCREEN) {
+                if (rc.welcome_shown_prompt && ev.key.code == sf::Keyboard::Return) {
+                    if (rc.welcome_player_count >= 1 && rc.welcome_player_count <= 4) {
+                        // Signal arbiter that player count is ready
+                        pthread_mutex_lock(&state->state_mutex);
+                        state->player_count = rc.welcome_player_count;
+                        state->spawning_unlocked = (rc.welcome_player_count < 4);
+                        pthread_mutex_unlock(&state->state_mutex);
+                        // Transition to main game
+                        rc.input_state = INPUT_IDLE;
+                    }
+                } else {
+                    int digit = -1;
+                    if (ev.key.code >= sf::Keyboard::Num1 && ev.key.code <= sf::Keyboard::Num4)
+                        digit = ev.key.code - sf::Keyboard::Num0;
+                    else if (ev.key.code >= sf::Keyboard::Numpad1 && ev.key.code <= sf::Keyboard::Numpad4)
+                        digit = ev.key.code - sf::Keyboard::Numpad0;
+                    if (digit >= 1 && digit <= 4) {
+                        rc.welcome_player_count = digit;
+                    }
+                }
+                continue;
+            }
+
             // -- Tab toggles the side panel between prompt/enemies -----
             if (ev.key.code == sf::Keyboard::Tab) {
                 rc.side_show_prompt = !rc.side_show_prompt;
+                continue;
+            }
+
+            // -- P toggles left player info pane ------------------------
+            if (ev.key.code == sf::Keyboard::P) {
+                rc.show_player_panel = !rc.show_player_panel;
                 continue;
             }
 
@@ -1652,7 +1898,7 @@ inline void* render_thread(void* arg) {
                                ev.key.code == sf::Keyboard::Return) {
                         if (!rc.digit_buffer.empty()) {
                             int raw = std::stoi(rc.digit_buffer);
-                            int actual = state->player_count + raw;
+                            int actual = state->player_count + raw - 1;
                             if (actual >= state->player_count &&
                                 actual < state->total_entities &&
                                 state->entities[actual].is_alive) {
@@ -1716,17 +1962,28 @@ inline void* render_thread(void* arg) {
             }
         }
 
-        // Set input_state correctly each frame based on awaiting flags
-        if (state->awaiting_drop_response)
-            rc.input_state = INPUT_DROP_PROMPT;
-        else if (state->awaiting_player_input && rc.input_state == INPUT_IDLE)
-            rc.input_state = INPUT_SHOW_MENU;
-        else if (!state->awaiting_player_input)
-            rc.input_state = INPUT_IDLE;
+        // Set input_state correctly each frame based on awaiting flags.
+        // Leave the welcome screen alone until it records the player count.
+        if (rc.input_state != INPUT_WELCOME_SCREEN) {
+            if (state->awaiting_drop_response)
+                rc.input_state = INPUT_DROP_PROMPT;
+            else if (state->awaiting_player_input && rc.input_state == INPUT_IDLE)
+                rc.input_state = INPUT_SHOW_MENU;
+            else if (!state->awaiting_player_input)
+                rc.input_state = INPUT_IDLE;
+        }
 
         float dt = clock.restart().asSeconds();
         if (dt > 0.1f) dt = 0.1f;
         accumulator += dt;
+
+        // Welcome screen timer
+        if (rc.input_state == INPUT_WELCOME_SCREEN) {
+            rc.welcome_timer += dt;
+            if (rc.welcome_timer >= 2.0f && !rc.welcome_shown_prompt) {
+                rc.welcome_shown_prompt = true;
+            }
+        }
 
         // Snapshot state (brief lock)
         GameSnapshot snap = {};
@@ -1757,6 +2014,13 @@ inline void* render_thread(void* arg) {
         // Render
         rc.window.clear(rgb(0x0a, 0x0a, 0x14));
 
+        // -- Welcome Screen --
+        if (rc.input_state == INPUT_WELCOME_SCREEN) {
+            draw_welcome_screen(rc);
+            rc.window.display();
+            continue;
+        }
+
         // 1. Background
         draw_battle_bg(rc);
 
@@ -1773,7 +2037,8 @@ inline void* render_thread(void* arg) {
         // 5. Side panels (stats). The right-hand slot is shared between
         // the enemy panel and the action prompt; Tab toggles which one
         // is visible. When no prompt is active, always show enemies.
-        draw_player_panel(rc, snap);
+        if (rc.show_player_panel)
+            draw_player_panel(rc, snap);
 
         bool prompt_active = (rc.input_state != INPUT_IDLE);
         bool show_prompt   = prompt_active && rc.side_show_prompt;
@@ -1783,17 +2048,14 @@ inline void* render_thread(void* arg) {
         // 6. Header bar
         draw_header(rc, snap);
 
-        // 7. Artifact status
-        draw_artifacts(rc, snap);
-
-        // 8. Action menu (right-side panel slot when toggle is on)
+        // 7. Action menu (right-side panel slot when toggle is on)
         if (show_prompt)
             draw_input_overlay(rc, snap, state);
 
-        // 9. Bottom pane — weapon icons centered
-        draw_bottom_pane(rc);
+        // 8. Bottom pane — merged artifacts and weapons
+        draw_bottom_pane(rc, snap, state);
 
-        // 10. Game over overlay (on top of everything)
+        // 9. Game over overlay (on top of everything)
         draw_game_over(rc, snap);
 
         rc.window.display();

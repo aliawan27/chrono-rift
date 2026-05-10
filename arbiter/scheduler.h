@@ -25,6 +25,16 @@ inline void log_action(SharedState* state, const char* msg) {
         (state->action_log_head + 1) % ACTION_LOG_SIZE;
 }
 
+inline bool npc_weapon_active(SharedState* state) {
+    return state->npc_weapon_damage_bonus > 0;
+}
+
+inline int strike_damage_for(SharedState* state, Entity* actor) {
+    if (!actor->is_player && npc_weapon_active(state))
+        return actor->damage + state->npc_weapon_damage_bonus;
+    return actor->damage;
+}
+
 // Sabse pehle full stamina wala entity dhundho — fair round-robin
 // when multiple entities are tied at max stamina.
 inline int find_next_actor(SharedState* state) {
@@ -87,7 +97,8 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
     switch (action->action) {
         case ACTION_ATTACK_STRIKE:
             if (target && target->is_alive) {
-                target->hp -= actor->damage;
+                int strike_damage = strike_damage_for(state, actor);
+                target->hp -= strike_damage;
                 state->anim_attacker_idx = action->actor_index;
                 state->anim_target_idx   = action->target_index;
                 state->anim_is_kill      = (target->hp <= 0);
@@ -108,12 +119,17 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                         }
                         if (do_drop) {
                             state->pending_drop_weapon_id = rand() % 8;
+                            // Ensure we don't drop the same weapon twice
+                            while (state->pending_drop_weapon_id == state->last_dropped_weapon) {
+                                state->pending_drop_weapon_id = rand() % 8;
+                            }
+                            state->last_dropped_weapon = state->pending_drop_weapon_id;
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
                         // Spawn replacement if alive NPC count < initial
                         // and hard cap not reached
-                        if (state->spawning_unlocked &&
+                        if (state->player_count < 4 &&
                             state->total_npcs_spawned < MAX_TOTAL_NPCS) {
                             int alive_npcs = 0;
                             for (int ii = state->player_count;
@@ -132,10 +148,21 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                     cout << "[ACTION] " << buf << endl;
                 } else {
                     char buf[128];
-                    snprintf(buf, sizeof(buf),
-                             "%s dealt %d damage to %s. HP: %d",
-                             actor->name, actor->damage,
-                             target->name, target->hp);
+                    if (!actor->is_player && npc_weapon_active(state)) {
+                        snprintf(buf, sizeof(buf),
+                                 "%s dealt %d damage to %s (%d base + %d weapons). HP: %d",
+                                 actor->name,
+                                 strike_damage,
+                                 target->name,
+                                 actor->damage,
+                                 state->npc_weapon_damage_bonus,
+                                 target->hp);
+                    } else {
+                        snprintf(buf, sizeof(buf),
+                                 "%s dealt %d damage to %s. HP: %d",
+                                 actor->name, strike_damage,
+                                 target->name, target->hp);
+                    }
                     log_action(state, buf);
                     cout << "[ACTION] " << buf << endl;
                 }
@@ -239,10 +266,15 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                         }
                         if (do_drop) {
                             state->pending_drop_weapon_id = rand() % 8;
+                            // Ensure we don't drop the same weapon twice
+                            while (state->pending_drop_weapon_id == state->last_dropped_weapon) {
+                                state->pending_drop_weapon_id = rand() % 8;
+                            }
+                            state->last_dropped_weapon = state->pending_drop_weapon_id;
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
-                        if (state->spawning_unlocked &&
+                        if (state->player_count < 4 &&
                             state->total_npcs_spawned < MAX_TOTAL_NPCS) {
                             int alive_npcs = 0;
                             for (int ii = state->player_count;

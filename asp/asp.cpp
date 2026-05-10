@@ -76,13 +76,16 @@ void* npc_thread(void* arg) {
 
         // Check if a dropped weapon is waiting for an NPC to pick up
         pthread_mutex_lock(&state->state_mutex);
-        if (state->npc_should_pickup && state->pending_drop_weapon_id != -1) {
-            int wid = state->pending_drop_weapon_id;
-            allocate_weapon(&state->entities[my_index], wid);
-            state->npc_should_pickup      = false;
-            state->pending_drop_weapon_id = -1;
+        if (state->npc_should_pickup &&
+            state->npc_weapon_id >= 0 &&
+            state->npc_weapon_id < (int)(sizeof(WEAPON_TABLE)/sizeof(WEAPON_TABLE[0]))) {
+            int wid = state->npc_weapon_id;
+            state->npc_should_pickup = false;
             cout << "[ASP] " << state->entities[my_index].name
-                 << " picked up " << WEAPON_TABLE[wid].name << "." << endl;
+                 << " picked up " << WEAPON_TABLE[wid].name
+                 << ". All enemies now have +"
+                 << state->npc_weapon_damage_bonus
+                 << " total weapon damage." << endl;
         }
         pthread_mutex_unlock(&state->state_mutex);
 
