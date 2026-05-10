@@ -35,6 +35,52 @@ inline int strike_damage_for(SharedState* state, Entity* actor) {
     return actor->damage;
 }
 
+// After a turn, offer the Eclipse Relic to the current actor if it's free
+inline void offer_eclipse_relic(SharedState* state, int actor_idx) {
+    if (!state->artifacts.eclipse_relic_exists) return;
+    if (!state->artifacts.eclipse_relic_free)   return;
+
+    Entity* actor = &state->entities[actor_idx];
+    if (!actor->is_alive) return;
+
+    if (actor->is_player) {
+        // Set flag — HIP will show a Y/N prompt, same as weapon drop
+        state->awaiting_eclipse_response = true;
+        state->eclipse_accept            = false;
+
+        // Wait for renderer to resolve the prompt
+        while (state->awaiting_eclipse_response &&
+               state->game_status == GAME_RUNNING) {
+            usleep(10000);
+        }
+
+        if (state->game_status != GAME_RUNNING) return;
+
+        if (state->eclipse_accept) {
+            acquire_artifact(state, actor_idx, ARTIFACT_ECLIPSE_RELIC);
+            cout << "[ECLIPSE] " << actor->name
+                 << " picked up the Eclipse Relic!" << endl;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s picked up the Eclipse Relic!",
+                     actor->name);
+            pthread_mutex_lock(&state->state_mutex);
+            log_action(state, buf);
+            pthread_mutex_unlock(&state->state_mutex);
+        }
+    } else {
+        // NPC always picks it up
+        acquire_artifact(state, actor_idx, ARTIFACT_ECLIPSE_RELIC);
+        cout << "[ECLIPSE] " << actor->name
+             << " (NPC) grabbed the Eclipse Relic!" << endl;
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%s (NPC) grabbed the Eclipse Relic!",
+                 actor->name);
+        pthread_mutex_lock(&state->state_mutex);
+        log_action(state, buf);
+        pthread_mutex_unlock(&state->state_mutex);
+    }
+}
+
 // Sabse pehle full stamina wala entity dhundho — fair round-robin
 // when multiple entities are tied at max stamina.
 inline int find_next_actor(SharedState* state) {
@@ -474,6 +520,10 @@ inline void run_scheduler(SharedState* state) {
         } else {
             pthread_mutex_unlock(&state->state_mutex);
         }
+
+        // Offer Eclipse Relic to current actor if it just became free
+        if (state->game_status == GAME_RUNNING)
+            offer_eclipse_relic(state, actor_idx);
     }
 
     cout << "[SCHEDULER] Game ended. Status: " << state->game_status << endl;

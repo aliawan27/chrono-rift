@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "shared/shared_memory.h"
 #include "shared/inventory.h"
+#include "shared/artifacts.h"   // for acquire_artifact
 
 using namespace std;
 
@@ -17,14 +18,10 @@ struct NpcThreadData {
     int npc_index;
 };
 
-// Stun signal handler — 3 second pause, then clear the specific target
+// SIGUSR1 handler — only purpose is to interrupt sem_wait() via EINTR.
+// Actual stun logic runs in each npc_thread using per-entity is_stunned.
 void handle_sigusr1(int) {
-    sleep(3);
-    if (state) {
-        int idx = state->stun_target_index;
-        if (idx >= 0 && idx < MAX_ENTITIES)
-            state->entities[idx].is_stunned = false;
-    }
+    // intentionally empty
 }
 
 void handle_sigterm(int) {
@@ -64,6 +61,28 @@ void* npc_thread(void* arg) {
             break;
         }
 
+        // Stun check — runs in thread context, safe to sleep here.
+        // The Arbiter sets is_stunned=true before sending SIGUSR1, so this
+        // flag is accurate regardless of which thread caught the signal.
+        if (state->entities[my_index].is_stunned) {
+            cout << "[ASP] " << state->entities[my_index].name
+                 << " is stunned! Waiting 3 seconds..." << endl;
+            sleep(3);   // safe: normal thread code, not a signal handler
+
+            pthread_mutex_lock(&state->state_mutex);
+            state->entities[my_index].is_stunned = false;
+            pthread_mutex_unlock(&state->state_mutex);
+
+            // Submit skip so Arbiter can advance the turn
+            pthread_mutex_lock(&state->action_mutex);
+            state->action_slot.ready        = true;
+            state->action_slot.actor_index  = my_index;
+            state->action_slot.target_index = -1;
+            state->action_slot.action       = ACTION_SKIP;
+            pthread_mutex_unlock(&state->action_mutex);
+            continue;   // do NOT sem_post — token consumed on this stun turn
+        }
+
         pthread_mutex_lock(&state->action_mutex);
         int current = state->current_turn;
         pthread_mutex_unlock(&state->action_mutex);
@@ -86,8 +105,17 @@ void* npc_thread(void* arg) {
                  << ". All enemies now have +"
                  << state->npc_weapon_damage_bonus
                  << " total weapon damage." << endl;
+
+            // Register artifact if Solar Core or Lunar Blade
+            pthread_mutex_unlock(&state->state_mutex);
+            if (wid == WEAPON_SOLAR_CORE || wid == WEAPON_LUNAR_BLADE) {
+                int artifact_id = (wid == WEAPON_SOLAR_CORE)
+                                  ? ARTIFACT_SOLAR_CORE : ARTIFACT_LUNAR_BLADE;
+                acquire_artifact(state, my_index, artifact_id);
+            }
+        } else {
+            pthread_mutex_unlock(&state->state_mutex);
         }
-        pthread_mutex_unlock(&state->state_mutex);
 
         // Decide action: prefer Strike if any player is alive, else Skip
         int target = pick_random_alive_player(state);

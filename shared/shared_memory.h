@@ -63,6 +63,8 @@ inline SharedState* create_shared_memory() {
     state->awaiting_player_input       = false;
     state->awaiting_player_idx         = -1;
     state->awaiting_drop_response      = false;
+    state->awaiting_eclipse_response   = false;
+    state->eclipse_accept              = false;
 
     sem_init(&state->player_turn_sem, 1, 0);
     sem_init(&state->npc_turn_sem,    1, 0);

@@ -20,11 +20,10 @@ void handle_sigterm(int) {
     sem_post(&state->player_turn_sem);
 }
 
-// Global flag — set by signal handler, cleared by player thread
-static volatile sig_atomic_t g_player_stunned = 0;
-
+// SIGUSR1 handler — only purpose is to interrupt sem_wait() via EINTR.
+// The actual stun logic runs in the thread loop using per-entity is_stunned.
 void handle_sigusr1_hip(int) {
-    g_player_stunned = 1;   // only safe operation in signal handler
+    // intentionally empty — EINTR on sem_wait is sufficient
 }
 
 void* player_thread(void* arg) {
@@ -33,9 +32,36 @@ void* player_thread(void* arg) {
 
     while (running && state->game_status == GAME_RUNNING) {
         sem_wait(&state->player_turn_sem);
+        // Note: sem_wait may return due to EINTR (from SIGUSR1).
+        // In that case no token was consumed, so we must NOT sem_post below
+        // unless we explicitly decide to pass on the turn.
+
         if (!running || state->game_status != GAME_RUNNING) {
             sem_post(&state->player_turn_sem);
             break;
+        }
+
+        // Check stun BEFORE checking current_turn.
+        // The Arbiter sets is_stunned=true on the shared entity before
+        // sending SIGUSR1, so this flag is always accurate regardless of
+        // which thread caught the signal.
+        if (state->entities[my_index].is_stunned) {
+            cout << "[HIP] " << state->entities[my_index].name
+                 << " is stunned! Waiting 3 seconds..." << endl;
+            sleep(3);   // safe: this is normal thread code, not a signal handler
+
+            pthread_mutex_lock(&state->state_mutex);
+            state->entities[my_index].is_stunned = false;
+            pthread_mutex_unlock(&state->state_mutex);
+
+            // Submit a skip action so the Arbiter can advance the turn
+            pthread_mutex_lock(&state->action_mutex);
+            state->action_slot.ready        = true;
+            state->action_slot.actor_index  = my_index;
+            state->action_slot.target_index = -1;
+            state->action_slot.action       = ACTION_SKIP;
+            pthread_mutex_unlock(&state->action_mutex);
+            continue;   // do NOT sem_post — we consumed the token on this stun turn
         }
 
         pthread_mutex_lock(&state->action_mutex);
@@ -45,29 +71,6 @@ void* player_thread(void* arg) {
         if (current != my_index) {
             sem_post(&state->player_turn_sem);
             usleep(10000);
-            continue;
-        }
-
-        // Check if this player is stunned BEFORE taking input
-        if (g_player_stunned) {
-            g_player_stunned = 0;
-            cout << "[HIP] " << state->entities[my_index].name
-                 << " is stunned! Waiting 3 seconds..." << endl;
-            sleep(3);
-
-            // Now safe to lock and clear the flag
-            pthread_mutex_lock(&state->state_mutex);
-            state->entities[my_index].is_stunned = false;
-            pthread_mutex_unlock(&state->state_mutex);
-
-            // Stamina was already full — skip the turn, reset to 0
-            // Arbiter handles stamina, just submit a skip
-            pthread_mutex_lock(&state->action_mutex);
-            state->action_slot.ready        = true;
-            state->action_slot.actor_index  = my_index;
-            state->action_slot.target_index = -1;
-            state->action_slot.action       = ACTION_SKIP;
-            pthread_mutex_unlock(&state->action_mutex);
             continue;
         }
 

@@ -98,7 +98,8 @@ enum InputState {
     INPUT_SHOW_TARGETS,     // waiting for target digit
     INPUT_SHOW_WEAPONS,     // waiting for weapon digit from inventory
     INPUT_SHOW_LTS,         // waiting for LTS index digit
-    INPUT_DROP_PROMPT       // waiting for Y or N
+    INPUT_DROP_PROMPT,      // waiting for Y or N (weapon drop)
+    INPUT_ECLIPSE_PROMPT    // waiting for Y or N (Eclipse Relic pickup)
 };
 
 // ----------------------------------------------------------------------
@@ -1448,6 +1449,22 @@ inline void draw_input_overlay(RenderContext& rc,
         return;
     }
 
+    // ── Eclipse Relic pickup prompt ───────────────────────────────────────────────
+    if (rc.input_state == INPUT_ECLIPSE_PROMPT) {
+        draw_text_safe(rc, "ECLIPSE RELIC!",
+                   bx + 10, by + 44, 20,
+                   rgb(0xaf, 0x7a, 0xff), true);
+        draw_text_safe(rc, "A mysterious relic appears!",
+                   bx + 10, by + 74, 14, sf::Color::White, true);
+        draw_text_safe(rc, "Pick it up?", bx + 10, by + 100, 15,
+                   rgb(0xd0, 0xd0, 0xd0));
+        draw_text_safe(rc, "Y  pick up",  bx + 10, by + 142, 17,
+                   rgb(0x2e, 0xcc, 0x71));
+        draw_text_safe(rc, "N  leave it", bx + 10, by + 166, 17,
+                   rgb(0xe7, 0x4c, 0x3c));
+        return;
+    }
+
     // Player header (current turn)
     char header[64];
     snprintf(header, sizeof(header), "%s",
@@ -1805,6 +1822,20 @@ inline void* render_thread(void* arg) {
                 continue;
             }
 
+            // -- Eclipse Relic prompt ------------------------------------------
+            if (state->awaiting_eclipse_response) {
+                if (ev.key.code == sf::Keyboard::Y) {
+                    state->eclipse_accept            = true;
+                    state->awaiting_eclipse_response = false;
+                    rc.input_state = INPUT_IDLE;
+                } else if (ev.key.code == sf::Keyboard::N) {
+                    state->eclipse_accept            = false;
+                    state->awaiting_eclipse_response = false;
+                    rc.input_state = INPUT_IDLE;
+                }
+                continue;
+            }
+
             // -- Player turn input --------------------------------------
             if (!state->awaiting_player_input) continue;
             int player_idx = state->awaiting_player_idx;
@@ -1965,11 +1996,14 @@ inline void* render_thread(void* arg) {
         // Set input_state correctly each frame based on awaiting flags.
         // Leave the welcome screen alone until it records the player count.
         if (rc.input_state != INPUT_WELCOME_SCREEN) {
-            if (state->awaiting_drop_response)
+            if (state->awaiting_eclipse_response)
+                rc.input_state = INPUT_ECLIPSE_PROMPT;
+            else if (state->awaiting_drop_response)
                 rc.input_state = INPUT_DROP_PROMPT;
             else if (state->awaiting_player_input && rc.input_state == INPUT_IDLE)
                 rc.input_state = INPUT_SHOW_MENU;
-            else if (!state->awaiting_player_input)
+            else if (!state->awaiting_player_input && !state->awaiting_drop_response
+                     && !state->awaiting_eclipse_response)
                 rc.input_state = INPUT_IDLE;
         }
 

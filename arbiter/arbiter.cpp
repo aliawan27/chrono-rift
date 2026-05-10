@@ -63,16 +63,8 @@ int main() {
     }
 
     int player_count = state->player_count;
-    int npc_count;
-    if (player_count == 4) {
-        npc_count = 10;
-    } else if (player_count == 3) {
-        npc_count = 8;
-    } else if (player_count == 2) {
-        npc_count = 6;
-    } else {
-        npc_count = 5;
-    }
+    // Spec Section 10: "decided randomly on each run, between 2 and 9"
+    int npc_count = 2 + (rand() % 8);   // produces 2, 3, 4, 5, 6, 7, 8, or 9
     cout << "[ARBITER] Players: " << player_count
          << " | NPCs: " << npc_count << endl;
 

@@ -173,6 +173,10 @@ typedef struct {
     bool            awaiting_player_input;  // HIP sets true when waiting
     int             awaiting_player_idx;    // which player index is waiting
     bool            awaiting_drop_response; // HIP sets true when drop prompt needed
+
+    // Eclipse Relic pickup prompt
+    bool            awaiting_eclipse_response;  // scheduler sets true, renderer clears
+    bool            eclipse_accept;             // renderer fills: true=Y false=N
 } SharedState;
 
 #endif

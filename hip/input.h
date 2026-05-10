@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "shared/shared_state.h"
 #include "shared/inventory.h"
+#include "shared/artifacts.h"   // for acquire_artifact / release_artifact
 
 // Player se action lo via shared memory — renderer (Arbiter) keyboard
 // events fill kar k pending=true set karta hai. Yahan se cin nahi hota.
@@ -37,6 +38,33 @@ inline void get_player_action(int player_idx, SharedState* state) {
                 state->npc_should_pickup = true;
             }
             pthread_mutex_unlock(&state->state_mutex);
+
+            // Register in artifact table if it's Solar Core or Lunar Blade
+            if (ok && (dropped_weapon_id == WEAPON_SOLAR_CORE ||
+                       dropped_weapon_id == WEAPON_LUNAR_BLADE)) {
+                int artifact_id = (dropped_weapon_id == WEAPON_SOLAR_CORE)
+                                  ? ARTIFACT_SOLAR_CORE : ARTIFACT_LUNAR_BLADE;
+                acquire_artifact(state, player_idx, artifact_id);
+            }
+
+            // After any weapon allocation, check if an artifact-weapon was evicted to LTS
+            {
+                bool has_solar = false, has_lunar = false;
+                for (int s = 0; s < INVENTORY_SIZE; s++) {
+                    if (player->inventory[s] == WEAPON_SOLAR_CORE)  has_solar = true;
+                    if (player->inventory[s] == WEAPON_LUNAR_BLADE) has_lunar = true;
+                }
+                pthread_mutex_lock(&state->artifacts.table_mutex);
+                if (!has_solar && state->artifacts.solar_core_holder == player_idx) {
+                    pthread_mutex_unlock(&state->artifacts.table_mutex);
+                    release_artifact(state, player_idx, ARTIFACT_SOLAR_CORE);
+                } else if (!has_lunar && state->artifacts.lunar_blade_holder == player_idx) {
+                    pthread_mutex_unlock(&state->artifacts.table_mutex);
+                    release_artifact(state, player_idx, ARTIFACT_LUNAR_BLADE);
+                } else {
+                    pthread_mutex_unlock(&state->artifacts.table_mutex);
+                }
+            }
         } else {
             pthread_mutex_lock(&state->state_mutex);
             state->npc_weapon_id = dropped_weapon_id;
@@ -98,6 +126,26 @@ inline void get_player_action(int player_idx, SharedState* state) {
     state->awaiting_player_input = false;
     state->player_input.pending  = false;
     pthread_mutex_unlock(&state->player_input.mutex);
+
+    // After SWAP_IN (or any action), re-check: if an artifact-weapon was
+    // evicted to LTS, release the artifact table entry for consistency.
+    {
+        bool has_solar = false, has_lunar = false;
+        for (int s = 0; s < INVENTORY_SIZE; s++) {
+            if (player->inventory[s] == WEAPON_SOLAR_CORE)  has_solar = true;
+            if (player->inventory[s] == WEAPON_LUNAR_BLADE) has_lunar = true;
+        }
+        pthread_mutex_lock(&state->artifacts.table_mutex);
+        if (!has_solar && state->artifacts.solar_core_holder == player_idx) {
+            pthread_mutex_unlock(&state->artifacts.table_mutex);
+            release_artifact(state, player_idx, ARTIFACT_SOLAR_CORE);
+        } else if (!has_lunar && state->artifacts.lunar_blade_holder == player_idx) {
+            pthread_mutex_unlock(&state->artifacts.table_mutex);
+            release_artifact(state, player_idx, ARTIFACT_LUNAR_BLADE);
+        } else {
+            pthread_mutex_unlock(&state->artifacts.table_mutex);
+        }
+    }
 }
 
 #endif
