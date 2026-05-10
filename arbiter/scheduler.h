@@ -8,28 +8,69 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include <cstdlib>
+#include <cstdio>
 #include "shared/shared_state.h"
 #include "shared/inventory.h"
 #include "shared/artifacts.h"
+#include "arbiter/init.h"
 
 using namespace std;
 
-// Sabse pehle full stamina wala entity dhundho
+// Append a message to the circular action log.
+// Caller MUST hold state_mutex.
+inline void log_action(SharedState* state, const char* msg) {
+    strncpy(state->action_log[state->action_log_head], msg, 127);
+    state->action_log[state->action_log_head][127] = '\0';
+    state->action_log_head =
+        (state->action_log_head + 1) % ACTION_LOG_SIZE;
+}
+
+inline bool npc_weapon_active(SharedState* state) {
+    return state->npc_weapon_damage_bonus > 0;
+}
+
+inline int strike_damage_for(SharedState* state, Entity* actor) {
+    if (!actor->is_player && npc_weapon_active(state))
+        return actor->damage + state->npc_weapon_damage_bonus;
+    return actor->damage;
+}
+
+// Sabse pehle full stamina wala entity dhundho — fair round-robin
+// when multiple entities are tied at max stamina.
 inline int find_next_actor(SharedState* state) {
-    int best_idx   = -1;
-    int best_stamp = -1;
+    // Collect ALL entities that are at max stamina
+    int candidates[MAX_ENTITIES];
+    int count = 0;
 
     for (int i = 0; i < state->total_entities; i++) {
         Entity* e = &state->entities[i];
         if (e->is_alive && !e->is_stunned &&
             e->stamina >= e->max_stamina) {
-            if (e->stamina > best_stamp) {
-                best_stamp = e->stamina;
-                best_idx   = i;
-            }
+            candidates[count++] = i;
         }
     }
-    return best_idx;
+
+    if (count == 0) return -1;
+    if (count == 1) return candidates[0];
+
+    // Multiple entities ready — pick the one that comes
+    // AFTER last_actor_index in a circular order.
+    // This guarantees round-robin when speeds are equal.
+    int last = state->last_actor_index;
+
+    // Find the candidate with the smallest index that is
+    // strictly greater than last. If none, wrap around
+    // to the smallest index overall.
+    int best = -1;
+    for (int i = 0; i < count; i++) {
+        if (candidates[i] > last) {
+            if (best == -1 || candidates[i] < candidates[best])
+                best = i;
+        }
+    }
+    if (best == -1) best = 0; // wrap: pick lowest index
+
+    return candidates[best];
 }
 
 // Ek tick mein sab entities ki stamina badhao
@@ -56,27 +97,74 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
     switch (action->action) {
         case ACTION_ATTACK_STRIKE:
             if (target && target->is_alive) {
-                target->hp -= actor->damage;
+                int strike_damage = strike_damage_for(state, actor);
+                target->hp -= strike_damage;
+                state->anim_attacker_idx = action->actor_index;
+                state->anim_target_idx   = action->target_index;
+                state->anim_is_kill      = (target->hp <= 0);
+                state->anim_pending      = true;
                 if (target->hp <= 0) {
                     target->hp       = 0;
                     target->is_alive = false;
                     release_all_artifacts(state, action->target_index);
                     if (!target->is_player) {
                         state->enemies_killed++;
-                        // 40% chance weapon drop
-                        if (rand() % 100 < 40) {
+                        // First kill always drops; subsequent kills 65%
+                        bool do_drop = false;
+                        if (!state->first_kill_done) {
+                            do_drop = true;
+                            state->first_kill_done = true;
+                        } else {
+                            do_drop = (rand() % 100 < 65);
+                        }
+                        if (do_drop) {
                             state->pending_drop_weapon_id = rand() % 8;
+                            // Ensure we don't drop the same weapon twice
+                            while (state->pending_drop_weapon_id == state->last_dropped_weapon) {
+                                state->pending_drop_weapon_id = rand() % 8;
+                            }
+                            state->last_dropped_weapon = state->pending_drop_weapon_id;
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
+                        // Spawn replacement if alive NPC count < initial
+                        // and hard cap not reached
+                        if (state->player_count < 4 &&
+                            state->total_npcs_spawned < MAX_TOTAL_NPCS) {
+                            int alive_npcs = 0;
+                            for (int ii = state->player_count;
+                                 ii < state->total_entities; ii++)
+                                if (state->entities[ii].is_alive) alive_npcs++;
+                            if (alive_npcs < state->npc_count) {
+                                state->spawn_pending_count++;
+                                spawn_npc_entity(state);
+                            }
+                        }
                     }
-                    cout << "[ACTION] " << actor->name
-                         << " killed " << target->name << "!" << endl;
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "%s killed %s!",
+                             actor->name, target->name);
+                    log_action(state, buf);
+                    cout << "[ACTION] " << buf << endl;
                 } else {
-                    cout << "[ACTION] " << actor->name
-                         << " dealt " << actor->damage
-                         << " damage to " << target->name
-                         << ". HP: " << target->hp << endl;
+                    char buf[128];
+                    if (!actor->is_player && npc_weapon_active(state)) {
+                        snprintf(buf, sizeof(buf),
+                                 "%s dealt %d damage to %s (%d base + %d weapons). HP: %d",
+                                 actor->name,
+                                 strike_damage,
+                                 target->name,
+                                 actor->damage,
+                                 state->npc_weapon_damage_bonus,
+                                 target->hp);
+                    } else {
+                        snprintf(buf, sizeof(buf),
+                                 "%s dealt %d damage to %s. HP: %d",
+                                 actor->name, strike_damage,
+                                 target->name, target->hp);
+                    }
+                    log_action(state, buf);
+                    cout << "[ACTION] " << buf << endl;
                 }
             }
             actor->stamina = 0;
@@ -84,11 +172,22 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
 
         case ACTION_ATTACK_EXHAUST:
             if (target && target->is_alive) {
-                target->stamina -= actor->damage;
+                state->anim_attacker_idx = action->actor_index;
+                state->anim_target_idx   = action->target_index;
+                state->anim_is_kill      = false;
+                state->anim_pending      = true;
+                int exhaust_dmg = actor->damage * 2;
+                target->stamina -= exhaust_dmg;
                 if (target->stamina < 0) target->stamina = 0;
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                         "%s reduced %s's stamina by %d. Stamina: %d",
+                         actor->name, target->name,
+                         exhaust_dmg, target->stamina);
+                log_action(state, buf);
                 cout << "[ACTION] " << actor->name
                      << " reduced " << target->name
-                     << "'s stamina by " << actor->damage
+                     << "'s stamina by " << exhaust_dmg
                      << ". Stamina: " << target->stamina << endl;
             }
             actor->stamina = 0;
@@ -97,9 +196,16 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
         case ACTION_STUN:
             // Stun signal target process ko bhejna
             if (target && target->is_alive) {
-                cout << "[ACTION] " << actor->name
-                     << " stunned " << target->name
-                     << " for 3 seconds!" << endl;
+                state->anim_attacker_idx = action->actor_index;
+                state->anim_target_idx   = action->target_index;
+                state->anim_is_kill      = false;
+                state->anim_pending      = true;
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                         "%s stunned %s for 3 seconds!",
+                         actor->name, target->name);
+                log_action(state, buf);
+                cout << "[ACTION] " << buf << endl;
                 state->stun_target_index = action->target_index;  // store BEFORE signal
                 target->is_stunned = true;
 
@@ -112,19 +218,27 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
             actor->stamina = 0;
             break;
 
-        case ACTION_ULTIMATE:
+        case ACTION_ULTIMATE: {
+            char buf[128];
             if (!check_ultimate_eligibility(state, action->actor_index)) {
-                cout << "[ACTION] " << actor->name
-                     << " lacks Solar Core + Lunar Blade — Ultimate rejected." << endl;
+                snprintf(buf, sizeof(buf),
+                         "%s lacks Solar Core + Lunar Blade — Ultimate rejected.",
+                         actor->name);
+                log_action(state, buf);
+                cout << "[ACTION] " << buf << endl;
                 actor->stamina = (int)(actor->max_stamina * 0.5);
             } else {
-                cout << "[ACTION] " << actor->name
-                     << " triggered Ultimate Ability! ASP frozen for 10 seconds." << endl;
+                snprintf(buf, sizeof(buf),
+                         "%s triggered Ultimate Ability! ASP frozen for 10 seconds.",
+                         actor->name);
+                log_action(state, buf);
+                cout << "[ACTION] " << buf << endl;
                 kill(state->asp_pid, SIGSTOP);
                 alarm(10);
                 actor->stamina = 0;
             }
             break;
+        }
 
         case ACTION_USE_WEAPON: {
             if (target && target->is_alive &&
@@ -132,60 +246,111 @@ inline void apply_action(SharedState* state, ActionSlot* action) {
                 action->weapon_id < (int)(sizeof(WEAPON_TABLE)/sizeof(WEAPON_TABLE[0]))) {
                 int dmg = WEAPON_TABLE[action->weapon_id].damage;
                 target->hp -= dmg;
+                state->anim_attacker_idx = action->actor_index;
+                state->anim_target_idx   = action->target_index;
+                state->anim_is_kill      = (target->hp <= 0);
+                state->anim_pending      = true;
                 if (target->hp <= 0) {
                     target->hp       = 0;
                     target->is_alive = false;
                     release_all_artifacts(state, action->target_index);
                     if (!target->is_player) {
                         state->enemies_killed++;
-                        if (rand() % 100 < 40) {
+                        // First kill always drops; subsequent kills 65%
+                        bool do_drop = false;
+                        if (!state->first_kill_done) {
+                            do_drop = true;
+                            state->first_kill_done = true;
+                        } else {
+                            do_drop = (rand() % 100 < 65);
+                        }
+                        if (do_drop) {
                             state->pending_drop_weapon_id = rand() % 8;
+                            // Ensure we don't drop the same weapon twice
+                            while (state->pending_drop_weapon_id == state->last_dropped_weapon) {
+                                state->pending_drop_weapon_id = rand() % 8;
+                            }
+                            state->last_dropped_weapon = state->pending_drop_weapon_id;
                             cout << "[DROP] " << target->name
                                  << " dropped a weapon!" << endl;
                         }
+                        if (state->player_count < 4 &&
+                            state->total_npcs_spawned < MAX_TOTAL_NPCS) {
+                            int alive_npcs = 0;
+                            for (int ii = state->player_count;
+                                 ii < state->total_entities; ii++)
+                                if (state->entities[ii].is_alive) alive_npcs++;
+                            if (alive_npcs < state->npc_count) {
+                                state->spawn_pending_count++;
+                                spawn_npc_entity(state);
+                            }
+                        }
                     }
-                    cout << "[ACTION] " << actor->name
-                         << " (weapon) killed " << target->name << "!" << endl;
+                    char buf[128];
+                    snprintf(buf, sizeof(buf),
+                             "%s (weapon) killed %s!",
+                             actor->name, target->name);
+                    log_action(state, buf);
+                    cout << "[ACTION] " << buf << endl;
                 } else {
-                    cout << "[ACTION] " << actor->name
-                         << " used " << WEAPON_TABLE[action->weapon_id].name
-                         << " for " << dmg
-                         << " damage on " << target->name
-                         << ". HP: " << target->hp << endl;
+                    char buf[128];
+                    snprintf(buf, sizeof(buf),
+                             "%s used %s for %d damage on %s. HP: %d",
+                             actor->name,
+                             WEAPON_TABLE[action->weapon_id].name,
+                             dmg, target->name, target->hp);
+                    log_action(state, buf);
+                    cout << "[ACTION] " << buf << endl;
                 }
             }
             actor->stamina = 0;
             break;
         }
 
-        case ACTION_SWAP_IN:
+        case ACTION_SWAP_IN: {
             swap_in(actor, action->weapon_id);
-            cout << "[ACTION] " << actor->name
-                 << " swapped in weapon from LTS slot "
-                 << action->weapon_id << "." << endl;
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                     "%s swapped in weapon from LTS slot %d.",
+                     actor->name, action->weapon_id);
+            log_action(state, buf);
+            cout << "[ACTION] " << buf << endl;
             actor->stamina = 0;
             break;
+        }
 
-        case ACTION_HEAL:
+        case ACTION_HEAL: {
             actor->hp += (int)(actor->max_hp * 0.1);
             if (actor->hp > actor->max_hp)
                 actor->hp = actor->max_hp;
-            cout << "[ACTION] " << actor->name
-                 << " healed. HP: " << actor->hp << endl;
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s healed. HP: %d",
+                     actor->name, actor->hp);
+            log_action(state, buf);
+            cout << "[ACTION] " << buf << endl;
             actor->stamina = 0;
             break;
+        }
 
-        case ACTION_SKIP:
-            cout << "[ACTION] " << actor->name
-                 << " skipped their turn." << endl;
+        case ACTION_SKIP: {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s skipped their turn.",
+                     actor->name);
+            log_action(state, buf);
+            cout << "[ACTION] " << buf << endl;
             actor->stamina = (int)(actor->max_stamina * 0.5);
             break;
+        }
 
-        case ACTION_QUIT:
-            cout << "[ACTION] Player quit the game." << endl;
+        case ACTION_QUIT: {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "Player quit the game.");
+            log_action(state, buf);
+            cout << "[ACTION] " << buf << endl;
             state->game_status = GAME_QUIT;
             actor->stamina     = 0;
             break;
+        }
 
         default:
             cout << "[ACTION] Unknown action — assuming skip." << endl;
@@ -262,6 +427,8 @@ inline void run_scheduler(SharedState* state) {
         if (actor_idx == -1)
             continue;
 
+        state->last_actor_index = actor_idx;
+
         Entity* actor = &state->entities[actor_idx];
         cout << "[SCHEDULER] " << actor->name << "'s turn." << endl;
 
@@ -291,10 +458,19 @@ inline void run_scheduler(SharedState* state) {
         pthread_mutex_lock(&state->state_mutex);
         apply_action(state, &state->action_slot);
         check_game_status(state);
-        // Spawn Eclipse Relic at exactly 5 kills
-        if (state->enemies_killed == 5 && !state->artifacts.eclipse_relic_exists) {
-            pthread_mutex_unlock(&state->state_mutex);
-            spawn_eclipse_relic(state);
+        // At 5+ kills: unlock reinforcements and spawn Eclipse Relic.
+        if (state->enemies_killed >= 5) {
+            if (!state->spawning_unlocked) {
+                state->spawning_unlocked = true;
+                cout << "[SPAWN] Enemy reinforcements incoming!" << endl;
+            }
+            if (!state->artifacts.eclipse_relic_exists) {
+                pthread_mutex_unlock(&state->state_mutex);
+                spawn_eclipse_relic(state);
+                // re-lock not needed, eclipse spawn handles it
+            } else {
+                pthread_mutex_unlock(&state->state_mutex);
+            }
         } else {
             pthread_mutex_unlock(&state->state_mutex);
         }

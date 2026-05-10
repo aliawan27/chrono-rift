@@ -5,6 +5,7 @@
 #include <ctime>
 #include <pthread.h>
 #include "shared/shared_memory.h"
+#include "shared/inventory.h"
 
 using namespace std;
 
@@ -73,6 +74,21 @@ void* npc_thread(void* arg) {
             continue;
         }
 
+        // Check if a dropped weapon is waiting for an NPC to pick up
+        pthread_mutex_lock(&state->state_mutex);
+        if (state->npc_should_pickup &&
+            state->npc_weapon_id >= 0 &&
+            state->npc_weapon_id < (int)(sizeof(WEAPON_TABLE)/sizeof(WEAPON_TABLE[0]))) {
+            int wid = state->npc_weapon_id;
+            state->npc_should_pickup = false;
+            cout << "[ASP] " << state->entities[my_index].name
+                 << " picked up " << WEAPON_TABLE[wid].name
+                 << ". All enemies now have +"
+                 << state->npc_weapon_damage_bonus
+                 << " total weapon damage." << endl;
+        }
+        pthread_mutex_unlock(&state->state_mutex);
+
         // Decide action: prefer Strike if any player is alive, else Skip
         int target = pick_random_alive_player(state);
 
@@ -115,15 +131,37 @@ int main() {
     cout << "[ASP] Attached. Spawning "
          << state->npc_count << " NPC thread(s)..." << endl;
 
-    pthread_t      threads[MAX_NPCS];
-    NpcThreadData  thread_data[MAX_NPCS];
+    pthread_t      threads[MAX_ENTITIES];
+    NpcThreadData  thread_data[MAX_ENTITIES];
+
+    int total_threads = state->npc_count;
 
     for (int i = 0; i < state->npc_count; i++) {
         thread_data[i].npc_index = state->player_count + i;
         pthread_create(&threads[i], nullptr, npc_thread, &thread_data[i]);
     }
 
-    for (int i = 0; i < state->npc_count; i++)
+    // Spawn loop runs concurrently with initial NPC threads
+    while (running && state->game_status == GAME_RUNNING) {
+        usleep(200000);
+
+        pthread_mutex_lock(&state->state_mutex);
+        int pending = state->spawn_pending_count;
+        if (pending > 0)
+            state->spawn_pending_count = 0;
+        pthread_mutex_unlock(&state->state_mutex);
+
+        for (int i = 0; i < pending && total_threads < MAX_ENTITIES; i++) {
+            thread_data[total_threads].npc_index =
+                state->player_count + total_threads;
+            pthread_create(&threads[total_threads], nullptr,
+                           npc_thread, &thread_data[total_threads]);
+            total_threads++;
+        }
+    }
+
+    // Join all threads — initial and spawned
+    for (int i = 0; i < total_threads; i++)
         pthread_join(threads[i], nullptr);
 
     munmap(state, sizeof(SharedState));

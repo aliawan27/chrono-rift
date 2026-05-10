@@ -51,8 +51,18 @@ inline SharedState* create_shared_memory() {
     pthread_mutex_init(&state->state_mutex,            &mutex_attr);
     pthread_mutex_init(&state->action_mutex,           &mutex_attr);
     pthread_mutex_init(&state->artifacts.table_mutex,  &mutex_attr);
+    pthread_mutex_init(&state->player_input.mutex,     &mutex_attr);
 
     pthread_mutexattr_destroy(&mutex_attr);
+
+    state->player_input.pending        = false;
+    state->player_input.choice         = 0;
+    state->player_input.target_index   = -1;
+    state->player_input.weapon_id      = -1;
+    state->player_input.drop_accept    = false;
+    state->awaiting_player_input       = false;
+    state->awaiting_player_idx         = -1;
+    state->awaiting_drop_response      = false;
 
     sem_init(&state->player_turn_sem, 1, 0);
     sem_init(&state->npc_turn_sem,    1, 0);
@@ -61,7 +71,21 @@ inline SharedState* create_shared_memory() {
     state->enemies_killed          = 0;
     state->action_slot.ready       = false;
     state->pending_drop_weapon_id  = -1;
+    state->npc_weapon_id           = -1;
+    state->npc_weapon_damage_bonus = 0;
     state->npc_should_pickup       = false;
+    state->spawn_pending_count     = 0;
+    state->total_npcs_spawned      = 0;
+    state->first_kill_done         = false;
+    state->last_actor_index        = -1;
+    state->spawning_unlocked       = false;
+    state->anim_attacker_idx       = -1;
+    state->anim_target_idx         = -1;
+    state->anim_is_kill            = false;
+    state->anim_pending            = false;
+    state->action_log_head         = 0;
+    for (int i = 0; i < ACTION_LOG_SIZE; i++)
+        state->action_log[i][0] = '\0';
 
     for (int i = 0; i < MAX_ENTITIES; i++) {
         for (int j = 0; j < INVENTORY_SIZE; j++)
@@ -108,6 +132,7 @@ inline void destroy_shared_memory(SharedState* state) {
     pthread_mutex_destroy(&state->state_mutex);
     pthread_mutex_destroy(&state->action_mutex);
     pthread_mutex_destroy(&state->artifacts.table_mutex);
+    pthread_mutex_destroy(&state->player_input.mutex);
     sem_destroy(&state->player_turn_sem);
     sem_destroy(&state->npc_turn_sem);
 
